@@ -153,7 +153,7 @@ export function selectNode(
   const pathIds: string[] = [];
   let current: string | null = nodeId;
   while (current) {
-    const node = tree.nodes[current];
+    const node: TreeNode | undefined = tree.nodes[current];
     if (!node) break;
     node.selected = true;
     pathIds.unshift(current);
@@ -163,10 +163,10 @@ export function selectNode(
   // Walk down from nodeId following first selected child (or first child)
   current = nodeId;
   while (current) {
-    const node = tree.nodes[current];
+    const node: TreeNode | undefined = tree.nodes[current];
     if (!node || node.childIds.length === 0) break;
     // Pick first non-pruned child
-    const nextChild = node.childIds.find((cid) => !tree.nodes[cid]?.pruned);
+    const nextChild: string | undefined = node.childIds.find((cid: string) => !tree.nodes[cid]?.pruned);
     if (!nextChild) break;
     tree.nodes[nextChild].selected = true;
     pathIds.push(nextChild);
@@ -240,7 +240,7 @@ export function getDepth(tree: ConversationTree, nodeId: string): number {
   let depth = 0;
   let current: string | null = nodeId;
   while (current) {
-    const node = tree.nodes[current];
+    const node: TreeNode | undefined = tree.nodes[current];
     if (!node || !node.parentId) break;
     current = node.parentId;
     depth++;

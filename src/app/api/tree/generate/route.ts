@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTree, saveTree } from "@/lib/tree-store";
 import {
+  addNode,
   addPendingNodes,
   selectNode,
   updateNodeContent,
@@ -17,27 +18,36 @@ import { Session } from "@/lib/types";
  */
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { treeId, parentId, count } = body as {
+  const { treeId, parentId, count, userMessage } = body as {
     treeId: string;
     parentId: string;
     count?: number;
+    userMessage?: string; // if provided, create a user node first
   };
 
   const tree = getTree(treeId);
   if (!tree) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
 
-  const parent = tree.nodes[parentId];
+  // If userMessage provided, create user node first, then use it as parent
+  let actualParentId = parentId;
+  if (userMessage) {
+    const userNode = addNode(tree, parentId, "user", userMessage, "human", "complete");
+    selectNode(tree, userNode.id);
+    actualParentId = userNode.id;
+    saveTree(tree);
+  }
+
+  const parent = tree.nodes[actualParentId];
   if (!parent) return NextResponse.json({ error: "Parent node not found" }, { status: 404 });
 
   const n = count ?? tree.settings.rerollCount;
 
   // Create pending nodes
-  const pendingNodes = addPendingNodes(tree, parentId, "assistant", "ai-completion", n);
+  const pendingNodes = addPendingNodes(tree, actualParentId, "assistant", "ai-completion", n);
   saveTree(tree);
 
-  // Build conversation history from active path up to parentId
-  // First, temporarily select the parent to get the right path
-  selectNode(tree, parentId);
+  // Build conversation history from active path up to parent
+  selectNode(tree, actualParentId);
   const history = getConversationHistory(tree);
 
   // Build a stub session for the system prompt builder
@@ -58,7 +68,7 @@ export async function POST(req: NextRequest) {
   const model = tree.settings.model || process.env.VIVEKA_MODEL || "sonnet";
 
   // The parent node's content is the latest user message
-  const userMessage = parent.role === "user" ? parent.content : "";
+  const promptMessage = parent.role === "user" ? parent.content : "";
 
   // Fire N parallel completions
   const nodeIds = pendingNodes.map((n) => n.id);
@@ -68,7 +78,7 @@ export async function POST(req: NextRequest) {
     pendingNodes.map(async (pendingNode) => {
       try {
         const response = await queryClaudeCode(
-          userMessage,
+          promptMessage,
           systemPrompt,
           // Don't include the last user message in history since it's the prompt
           history.slice(0, -1),
@@ -92,7 +102,7 @@ export async function POST(req: NextRequest) {
       }
     })
   ).then(() => {
-    console.log(`[viveka-loom] ${n} completions done for ${parentId}`);
+    console.log(`[viveka-loom] ${n} completions done for ${actualParentId}`);
   });
 
   // Return immediately with the pending node IDs
