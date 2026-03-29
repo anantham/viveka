@@ -206,9 +206,9 @@ export default function HistoryPage() {
                   className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
                     s.status === "completed"
                       ? "bg-emerald-950 text-emerald-400"
-                      : s.status === "budget_exhausted"
+                      : s.status === "soft_locked"
                         ? "bg-red-950 text-red-400"
-                        : s.status === "abandoned"
+                        : s.status === "stopped_early"
                           ? "bg-stone-800 text-stone-500"
                           : "bg-blue-950 text-blue-400"
                   }`}

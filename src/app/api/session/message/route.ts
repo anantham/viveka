@@ -75,9 +75,10 @@ function buildIntervention(
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { sessionId, message } = body as {
+  const { sessionId, message, skipDelay } = body as {
     sessionId: string;
     message: string;
+    skipDelay?: boolean;
   };
 
   const session = getSession(sessionId);
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  if (session.status !== "active") {
+  if (session.status !== "active" && session.status !== "soft_locked") {
     return NextResponse.json(
       { error: `Session is ${session.status}` },
       { status: 400 }
@@ -102,6 +103,20 @@ export async function POST(req: NextRequest) {
 
   // Compute delay
   const delay = computeDelay(session, heuristics);
+
+  // If there's a delay and client hasn't waited yet, return delay info
+  // without making the Claude call. Client waits, then re-sends with skipDelay=true.
+  if (delay.delayMs > 0 && !skipDelay) {
+    timing.total_ms = Date.now() - totalStart;
+    return NextResponse.json({
+      pendingDelay: true,
+      delay,
+      timing,
+      sessionStatus: session.status,
+      budgetUsed: session.exchanges.length,
+      budgetTotal: session.budget,
+    });
+  }
 
   // Build conversation history for Claude (respecting excluded exchanges)
   const excluded = new Set(session.excludedExchanges || []);
@@ -157,11 +172,11 @@ export async function POST(req: NextRequest) {
   const storeStart = Date.now();
   const updatedExchanges = [...session.exchanges, exchange];
   const newStatus =
-    updatedExchanges.length >= session.budget ? "budget_exhausted" : "active";
+    updatedExchanges.length >= session.budget ? "soft_locked" : "active";
 
   updateSession(sessionId, {
     exchanges: updatedExchanges,
-    status: newStatus === "budget_exhausted" ? "budget_exhausted" : session.status,
+    status: newStatus === "soft_locked" ? "soft_locked" : session.status,
   });
   timing.store_ms = Date.now() - storeStart;
   timing.total_ms = Date.now() - totalStart;

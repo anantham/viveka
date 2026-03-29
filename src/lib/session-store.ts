@@ -53,6 +53,7 @@ export function createSession(
     completionMet: null,
     contextBlocks: [],
     excludedExchanges: [],
+    interventionLog: [],
   };
   sessions.set(session.id, session);
   saveSessions(sessions);

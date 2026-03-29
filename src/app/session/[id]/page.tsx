@@ -12,16 +12,31 @@ export default function SessionPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // We need to fetch the session from the server.
-    // Since the session store is in-memory on the server, we use the
-    // session data that was returned when we created it.
-    // For now, we'll store it in sessionStorage on creation and read it here.
-    const stored = sessionStorage.getItem(`viveka-session-${sessionId}`);
-    if (stored) {
-      setSession(JSON.parse(stored));
-    } else {
-      setError("Session not found. It may have been lost on page refresh.");
+    // Fetch session from server API first, fall back to sessionStorage
+    async function loadSession() {
+      try {
+        const res = await fetch(`/api/session/get?id=${encodeURIComponent(sessionId)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSession(data);
+          // Also update sessionStorage cache
+          sessionStorage.setItem(`viveka-session-${sessionId}`, JSON.stringify(data));
+          return;
+        }
+      } catch {
+        // API fetch failed, fall through to sessionStorage
+      }
+
+      // Fallback: try sessionStorage
+      const stored = sessionStorage.getItem(`viveka-session-${sessionId}`);
+      if (stored) {
+        setSession(JSON.parse(stored));
+      } else {
+        setError("Session not found. It may have been lost on server restart.");
+      }
     }
+
+    loadSession();
   }, [sessionId]);
 
   const handleSessionUpdate = useCallback((updated: Session) => {

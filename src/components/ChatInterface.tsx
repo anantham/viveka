@@ -36,9 +36,25 @@ interface ContextUsage {
   maxTokens: number;
 }
 
+interface DelayInfo {
+  delayMs: number;
+  message: string | null;
+  requiresConfirmation: boolean;
+}
+
+interface PendingDelayResponse {
+  pendingDelay: true;
+  delay: DelayInfo;
+  timing: Timing;
+  sessionStatus: string;
+  budgetUsed: number;
+  budgetTotal: number;
+}
+
 interface MessageResponse {
+  pendingDelay?: false;
   exchange: Exchange;
-  delay: { delayMs: number; message: string | null; requiresConfirmation: boolean };
+  delay: DelayInfo;
   timing: Timing;
   sessionStatus: string;
   budgetUsed: number;
@@ -54,12 +70,14 @@ export default function ChatInterface({
   const [session, setSession] = useState(initialSession);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [pendingDelay, setPendingDelay] = useState<MessageResponse["delay"] | null>(null);
+  const [pendingDelay, setPendingDelay] = useState<DelayInfo | null>(null);
   const [pendingResponse, setPendingResponse] = useState<Exchange | null>(null);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const [showCompletionCheck, setShowCompletionCheck] = useState(false);
   const [sessionEnded, setSessionEnded] = useState(false);
   const [reviseMode, setReviseMode] = useState(false);
   const [newIntent, setNewIntent] = useState("");
+  const [newCompletionCondition, setNewCompletionCondition] = useState("");
   const [debugMode, setDebugMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [timings, setTimings] = useState<Map<number, Timing>>(new Map());
@@ -85,10 +103,7 @@ export default function ChatInterface({
     }
   }, [session.exchanges.length, session.budget]);
 
-  const handleSend = async () => {
-    if (!input.trim() || loading) return;
-    const message = input.trim();
-    setInput("");
+  const sendMessage = async (message: string, skipDelay: boolean = false) => {
     setLoading(true);
     setLoadingStarted(Date.now());
 
@@ -96,7 +111,7 @@ export default function ChatInterface({
       const res = await fetch("/api/session/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.id, message }),
+        body: JSON.stringify({ sessionId: session.id, message, skipDelay }),
       });
 
       if (!res.ok) {
@@ -109,26 +124,34 @@ export default function ChatInterface({
       }
       setError(null);
 
-      const data: MessageResponse = await res.json();
+      const data = await res.json();
+
+      // Phase 1: Server returned delay info without making the Claude call.
+      // Show delay screen; on completion, re-send with skipDelay=true.
+      if (data.pendingDelay) {
+        const delayData = data as PendingDelayResponse;
+        setPendingDelay(delayData.delay);
+        setPendingMessage(message);
+        setLoading(false);
+        setLoadingStarted(null);
+        return;
+      }
+
+      // Phase 2 (or no-delay path): Full response with exchange
+      const fullData = data as MessageResponse;
 
       // Store timing, rate limit, context usage
-      if (data.timing) {
+      if (fullData.timing) {
         setTimings((prev) => {
           const next = new Map(prev);
-          next.set(data.exchange.index, data.timing);
+          next.set(fullData.exchange.index, fullData.timing);
           return next;
         });
       }
-      if (data.rateLimit) setRateLimit(data.rateLimit);
-      if (data.contextUsage) setContextUsage(data.contextUsage);
+      if (fullData.rateLimit) setRateLimit(fullData.rateLimit);
+      if (fullData.contextUsage) setContextUsage(fullData.contextUsage);
 
-      // If there's a delay, show delay screen first
-      if (data.delay.delayMs > 0) {
-        setPendingDelay(data.delay);
-        setPendingResponse(data.exchange);
-      } else {
-        applyExchange(data.exchange, data.sessionStatus);
-      }
+      applyExchange(fullData.exchange, fullData.sessionStatus);
     } catch (err) {
       console.error("Failed to send message:", err);
       setError(String(err));
@@ -136,6 +159,13 @@ export default function ChatInterface({
       setLoading(false);
       setLoadingStarted(null);
     }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() || loading) return;
+    const message = input.trim();
+    setInput("");
+    await sendMessage(message);
   };
 
   const applyExchange = useCallback((exchange: Exchange, status: string) => {
@@ -153,10 +183,14 @@ export default function ChatInterface({
   }, [onSessionUpdate]);
 
   const handleDelayComplete = useCallback(() => {
-    if (pendingResponse) {
-      applyExchange(pendingResponse, session.exchanges.length + 1 >= session.budget ? "budget_exhausted" : "active");
+    if (pendingMessage) {
+      setPendingDelay(null);
+      // Re-send the same message with skipDelay=true to get the actual response
+      sendMessage(pendingMessage, true);
+      setPendingMessage(null);
     }
-  }, [pendingResponse, applyExchange, session.exchanges.length, session.budget]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingMessage]);
 
   const handleClose = async (completionMet: boolean) => {
     try {
@@ -183,6 +217,7 @@ export default function ChatInterface({
         body: JSON.stringify({
           sessionId: session.id,
           newIntent: newIntent.trim(),
+          newCompletionCondition: newCompletionCondition.trim() || undefined,
         }),
       });
       const data = await res.json();
@@ -190,6 +225,7 @@ export default function ChatInterface({
       onSessionUpdate(data);
       setReviseMode(false);
       setNewIntent("");
+      setNewCompletionCondition("");
     } catch (err) {
       console.error("Failed to revise:", err);
     }
@@ -428,13 +464,22 @@ export default function ChatInterface({
 
       {/* Revise intent */}
       {reviseMode && (
-        <div className="px-4 py-3 border-t border-stone-800">
+        <div className="px-4 py-3 border-t border-stone-800 space-y-2">
           <div className="flex gap-2">
             <input
               type="text"
               value={newIntent}
               onChange={(e) => setNewIntent(e.target.value)}
               placeholder="New session intent (costs 1 exchange)"
+              className="flex-1 bg-stone-800 border border-stone-600 rounded px-3 py-1.5 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+            />
+          </div>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newCompletionCondition}
+              onChange={(e) => setNewCompletionCondition(e.target.value)}
+              placeholder="New completion condition (optional)"
               className="flex-1 bg-stone-800 border border-stone-600 rounded px-3 py-1.5 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
             />
             <button
@@ -444,7 +489,7 @@ export default function ChatInterface({
               Revise
             </button>
             <button
-              onClick={() => setReviseMode(false)}
+              onClick={() => { setReviseMode(false); setNewCompletionCondition(""); }}
               className="px-3 py-1.5 text-xs text-stone-600 hover:text-stone-400"
             >
               Cancel

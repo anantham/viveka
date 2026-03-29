@@ -141,6 +141,7 @@ export async function POST(req: NextRequest) {
       completionMet: null,
       contextBlocks: [],
       excludedExchanges: [],
+      interventionLog: [],
     };
 
     existingSessions.push(session);

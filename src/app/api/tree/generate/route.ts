@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
     completionMet: null,
     contextBlocks: [],
     excludedExchanges: [],
+    interventionLog: [],
   };
   const systemPrompt = buildSystemPrompt(stubSession);
   const model = tree.settings.model || process.env.VIVEKA_MODEL || "sonnet";

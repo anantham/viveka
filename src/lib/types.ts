@@ -1,5 +1,10 @@
 export type SessionMode = "instrumental" | "exploratory" | "reflective";
-export type SessionStatus = "active" | "completed" | "abandoned" | "budget_exhausted";
+export type SessionStatus =
+  | "active"
+  | "completed"        // user confirmed completion condition met
+  | "stopped_early"    // user ended before completion condition met
+  | "soft_locked"      // budget exhausted, increasingly delayed but not blocked
+  | "export_failed";   // session ended but Obsidian export failed
 export type InterventionType = "nudge" | "warning" | "pause" | "stop";
 export type InterventionSource = "heuristic" | "classifier";
 export type InterventionResponse = "accepted" | "dismissed" | "revised_intent" | null;
@@ -27,6 +32,7 @@ export interface Session {
   completionMet: boolean | null;
   contextBlocks: ContextBlock[];
   excludedExchanges: number[]; // indices of exchanges to exclude from context
+  interventionLog: InterventionEvent[]; // first-class log of all interventions shown
 }
 
 export interface Exchange {
@@ -68,6 +74,24 @@ export interface Intervention {
   type: InterventionType;
   message: string;
   source: InterventionSource;
+}
+
+/** First-class logged event for cross-session analysis */
+export interface InterventionEvent {
+  id: string;
+  sessionId: string;
+  exchangeIndex: number;
+  timestamp: string;
+  intervention: Intervention;
+  outcome: InterventionResponse;
+  /** What the user did after seeing the intervention */
+  followUpAction: "continued" | "revised_intent" | "ended_session" | "none";
+  /** Exchange content at the time of intervention (for pattern mining) */
+  triggerContext: {
+    userMessage: string;
+    heuristicFlags: HeuristicFlags;
+    classifierFlags: ClassifierFlags | null;
+  };
 }
 
 // Rough token estimate: ~4 chars per token for English text
