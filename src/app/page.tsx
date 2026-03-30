@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import SessionForm from "@/components/SessionForm";
 import { SessionMode } from "@/lib/types";
+import LLMSettings from "@/components/LLMSettings";
 
 export default function Home() {
   const router = useRouter();
@@ -78,6 +79,10 @@ export default function Home() {
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-8">
+      {/* Settings gear — top right */}
+      <div className="fixed top-4 right-4">
+        <LLMSettings />
+      </div>
       <div className="mb-8 text-center">
         <h1 className="text-lg font-medium text-stone-400 tracking-wider mb-1">
           VIVEKA

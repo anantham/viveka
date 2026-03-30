@@ -1,4 +1,9 @@
 import { spawn } from "child_process";
+import {
+  getOpenAICompatConfig,
+  queryOpenAICompat,
+  streamOpenAICompat,
+} from "./openai-compat";
 
 export interface RateLimitInfo {
   status: string;
@@ -32,6 +37,12 @@ export async function queryClaudeCode(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   options?: { model?: string; noTools?: boolean }
 ): Promise<ClaudeResponse> {
+  // Route to OpenAI-compatible backend if configured
+  const compatConfig = getOpenAICompatConfig();
+  if (compatConfig) {
+    return queryOpenAICompat(prompt, systemPrompt, conversationHistory, compatConfig);
+  }
+
   // Build the full prompt with conversation history
   let fullPrompt = "";
   for (const msg of conversationHistory) {
@@ -164,6 +175,13 @@ export async function* streamClaudeCode(
   systemPrompt: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>
 ): AsyncGenerator<string> {
+  // Route to OpenAI-compatible backend if configured
+  const compatConfig = getOpenAICompatConfig();
+  if (compatConfig) {
+    yield* streamOpenAICompat(prompt, systemPrompt, conversationHistory, compatConfig);
+    return;
+  }
+
   let fullPrompt = "";
   for (const msg of conversationHistory) {
     const label = msg.role === "user" ? "User" : "Assistant";

@@ -10,6 +10,7 @@ import CanvasView from "./CanvasView";
 import PatternOverlay from "../PatternOverlay";
 import UsageMeters from "../UsageMeters";
 import ContextPanel from "../ContextPanel";
+import LLMSettings from "../LLMSettings";
 
 interface LoomInterfaceProps {
   initialTree: ConversationTree;
@@ -388,6 +389,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <LLMSettings />
           <UsageMeters rateLimit={null} contextUsage={contextUsage} />
           <button
             onClick={() => setShowContextPanel((v) => !v)}

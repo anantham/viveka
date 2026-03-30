@@ -8,6 +8,7 @@ import CompletionCheck from "./CompletionCheck";
 import DelayScreen from "./DelayScreen";
 import ContextPanel from "./ContextPanel";
 import UsageMeters from "./UsageMeters";
+import LLMSettings from "./LLMSettings";
 
 interface ChatInterfaceProps {
   session: Session;
@@ -274,6 +275,7 @@ export default function ChatInterface({
           <BudgetMeter used={session.exchanges.length} total={session.budget} />
         </div>
         <div className="flex items-center gap-3">
+          <LLMSettings />
           <span className="text-xs text-stone-600">
             {session.mode}
           </span>
