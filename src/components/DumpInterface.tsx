@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ConversationTree, getActivePath } from "@/lib/tree";
+import RetrievePanel from "./RetrievePanel";
 
 interface DumpInterfaceProps {
   initialTree: ConversationTree;
@@ -26,6 +27,8 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
   });
   const [saving, setSaving] = useState(false);
   const [blocks, setBlocks] = useState<Array<{ id: string; content: string; timestamp: string }>>([]);
+  const [loadedNotePaths, setLoadedNotePaths] = useState<Set<string>>(new Set());
+  const [contextNotes, setContextNotes] = useState<Array<{ name: string; charCount: number }>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autoSaveRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -95,6 +98,38 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
       }
     },
     [tree.id, saving]
+  );
+
+  // Combined text for vault search (current input + all saved blocks)
+  const allText = [text, ...blocks.map((b) => b.content)].join("\n\n");
+
+  const handleAddNoteToContext = useCallback(
+    async (name: string, content: string) => {
+      // Add to the tree's context via the context API
+      try {
+        await fetch("/api/context/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: tree.id,
+            name: `📒 ${name}`,
+            content,
+            source: "file",
+          }),
+        });
+        setContextNotes((prev) => [...prev, { name, charCount: content.length }]);
+        // Mark as loaded to hide from suggestions
+        setLoadedNotePaths((prev) => {
+          const next = new Set(prev);
+          // We don't have the exact path here, but the name is unique enough
+          next.add(name);
+          return next;
+        });
+      } catch (err) {
+        console.error("Failed to add note to context:", err);
+      }
+    },
+    [tree.id]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -216,6 +251,27 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
           className="w-full h-full min-h-[300px] bg-transparent text-stone-200 text-base leading-relaxed placeholder:text-stone-700 focus:outline-none resize-none"
         />
       </div>
+
+      {/* Vault references — auto-detected from your writing */}
+      <RetrievePanel
+        text={allText}
+        onAddToContext={handleAddNoteToContext}
+        loadedPaths={loadedNotePaths}
+      />
+
+      {/* Loaded context notes indicator */}
+      {contextNotes.length > 0 && (
+        <div className="px-6 py-2 border-t border-stone-800/20 flex flex-wrap gap-2">
+          {contextNotes.map((note, i) => (
+            <span
+              key={i}
+              className="text-[10px] text-stone-600 px-1.5 py-0.5 bg-stone-800/50 rounded"
+            >
+              📒 {note.name} ({(note.charCount / 1000).toFixed(1)}k)
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Footer — subtle stats */}
       <footer className="px-6 py-3 border-t border-stone-800/20 flex items-center justify-between text-xs text-stone-700">
