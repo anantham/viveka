@@ -206,7 +206,7 @@ export default function CanvasNode({
         measuredRef(el);
       }}
       data-node-id={node.id}
-      className={`absolute select-none ${cursorClass}`}
+      className={`absolute ${cursorTool === "hand" ? "select-none" : "select-auto"} ${cursorClass}`}
       style={{
         left: position.x,
         top: position.y,

@@ -294,6 +294,38 @@ export default function CanvasView({
     [tree.nodes, onNodeEdit]
   );
 
+  // --- Tangent tool: select text → extract as new node ---
+  const handleTangentExtract = useCallback(() => {
+    if (cursorTool !== "tangent") return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+
+    const selectedText = selection.toString().trim();
+    if (selectedText.length < 2) return;
+
+    // Find which node the selection is in
+    const anchorEl = selection.anchorNode?.parentElement?.closest("[data-node-id]");
+    const sourceNodeId = anchorEl?.getAttribute("data-node-id");
+
+    if (sourceNodeId && tree.nodes[sourceNodeId]) {
+      // Create a new tangent node via API
+      fetch("/api/tree/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          treeId: tree.id,
+          parentId: sourceNodeId,
+          userMessage: selectedText,
+          count: 1,
+        }),
+      }).then(() => {
+        // Clear selection
+        selection.removeAllRanges();
+      });
+    }
+  }, [cursorTool, tree]);
+
   // --- Canvas click handler ---
   const handleCanvasPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -456,7 +488,11 @@ export default function CanvasView({
         }}
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={panZoomHandlers.onPointerMove}
-        onPointerUp={panZoomHandlers.onPointerUp}
+        onPointerUp={(e) => {
+          panZoomHandlers.onPointerUp(e);
+          // After pointer up, check for tangent text extraction
+          setTimeout(handleTangentExtract, 10);
+        }}
       >
         {/* Column indicator */}
         <div
