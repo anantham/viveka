@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { ConversationTree, TreeNode, getActivePath } from "@/lib/tree";
+import { ConversationTree, getActivePath } from "@/lib/tree";
 import {
   CursorTool,
   NodePositions,
@@ -14,6 +14,8 @@ import {
   cycleTool,
 } from "@/lib/canvas-utils";
 import { usePanZoom } from "@/hooks/usePanZoom";
+import { useFlipTransition } from "@/hooks/useFlipTransition";
+import { timedMeasure, getReport, getStats } from "@/lib/layout-perf";
 import CanvasNode from "./CanvasNode";
 import ReadingPath from "./ReadingPath";
 import CursorToolSwitcher from "./CursorToolSwitcher";
@@ -29,7 +31,8 @@ interface CanvasViewProps {
 
 type LayoutMode = "canvas" | "column";
 
-const NODE_WIDTH = 480;
+const NODE_WIDTH_CANVAS = 480;
+const NODE_WIDTH_COLUMN = 600;
 const COLUMN_CENTER_FALLBACK = 600;
 
 export default function CanvasView({
@@ -46,17 +49,23 @@ export default function CanvasView({
 
   // --- State ---
   const [positions, setPositions] = useState<NodePositions>(() =>
-    computeDefaultPositions(activeNodeIds, COLUMN_CENTER_FALLBACK * 2, NODE_WIDTH)
+    computeDefaultPositions(activeNodeIds, COLUMN_CENTER_FALLBACK * 2, NODE_WIDTH_CANVAS)
   );
   const [nodeHeights, setNodeHeights] = useState<Record<string, number>>({});
   const [cursorTool, setCursorTool] = useState<CursorTool>("hand");
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("canvas");
   const [isAnimating, setIsAnimating] = useState(false);
+  const [showPerfOverlay, setShowPerfOverlay] = useState(false);
   const savedFreeformPositions = useRef<NodePositions>({});
   const viewportRef = useRef<HTMLDivElement>(null);
 
+  // Current node width depends on layout mode
+  const nodeWidth = layoutMode === "column" ? NODE_WIDTH_COLUMN : NODE_WIDTH_CANVAS;
+
   const { state: panZoom, containerRef, handlers: panZoomHandlers, startCanvasPan, resetView } =
     usePanZoom();
+
+  const { snapshotFirst, animateFlip } = useFlipTransition();
 
   // --- Compute column center from viewport width ---
   const [columnCenterX, setColumnCenterX] = useState(COLUMN_CENTER_FALLBACK);
@@ -81,7 +90,6 @@ export default function CanvasView({
       let needsUpdate = false;
       let maxY = 0;
 
-      // Find the max Y of existing positioned nodes
       for (const id of activeNodeIds) {
         if (prev[id]) {
           const h = nodeHeights[id] ?? 80;
@@ -94,7 +102,7 @@ export default function CanvasView({
           needsUpdate = true;
           maxY += 20;
           updated[id] = {
-            x: columnCenterX - NODE_WIDTH / 2,
+            x: columnCenterX - NODE_WIDTH_CANVAS / 2,
             y: maxY,
           };
           maxY += nodeHeights[id] ?? 80;
@@ -107,43 +115,37 @@ export default function CanvasView({
 
   // --- Derived computations ---
 
-  // Which nodes are in-context (inside the reading column)
   const inContextNodeIds = useMemo(() => {
     return activeNodeIds.filter((id) => {
       const pos = positions[id];
       if (!pos) return false;
-      return isInContext(pos.x, NODE_WIDTH, columnCenterX);
+      return isInContext(pos.x, nodeWidth, columnCenterX);
     });
-  }, [activeNodeIds, positions, columnCenterX]);
+  }, [activeNodeIds, positions, columnCenterX, nodeWidth]);
 
-  // Reading order (only in-context nodes)
   const readingOrder = useMemo(
     () => computeReadingOrder(inContextNodeIds, positions),
     [inContextNodeIds, positions]
   );
 
-  // Reading path SVG points
   const pathPoints = useMemo(
-    () => computePathPoints(readingOrder, positions, NODE_WIDTH, nodeHeights),
-    [readingOrder, positions, nodeHeights]
+    () => computePathPoints(readingOrder, positions, nodeWidth, nodeHeights),
+    [readingOrder, positions, nodeHeights, nodeWidth]
   );
 
-  // Ghost node position
   const ghostPosition = useMemo(
     () => computeGhostPosition(readingOrder, positions, nodeHeights),
     [readingOrder, positions, nodeHeights]
   );
 
-  // Ghost point for the path arrow
   const ghostPathPoint = useMemo(
     () => ({
-      x: ghostPosition.x + NODE_WIDTH / 2,
+      x: ghostPosition.x + nodeWidth / 2,
       y: ghostPosition.y + 25,
     }),
-    [ghostPosition]
+    [ghostPosition, nodeWidth]
   );
 
-  // Reading order index map for badges
   const readingOrderIndex = useMemo(() => {
     const map: Record<string, number> = {};
     readingOrder.forEach((id, i) => {
@@ -171,42 +173,84 @@ export default function CanvasView({
     []
   );
 
-  // Layout mode toggle
-  const toggleLayoutMode = useCallback(() => {
+  // --- FLIP layout mode toggle ---
+  const toggleLayoutMode = useCallback(async () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Step 1: FLIP snapshot (First)
+    snapshotFirst(activeNodeIds, container);
+
     if (layoutMode === "canvas") {
-      // Save current positions, animate to column
+      // Save freeform positions before switching
       savedFreeformPositions.current = { ...positions };
+
+      // Compute destination column positions at the wider column width
       const columnPositions = computeColumnPositions(
         readingOrder,
         columnCenterX,
-        NODE_WIDTH,
+        NODE_WIDTH_COLUMN,
         nodeHeights
       );
+
+      // Apply new positions + width (this triggers re-render = "Last")
       setIsAnimating(true);
-      setPositions((prev) => ({ ...prev, ...columnPositions }));
       setLayoutMode("column");
-      setTimeout(() => setIsAnimating(false), 450);
+      setPositions((prev) => ({ ...prev, ...columnPositions }));
+
+      // Step 2: After React renders, run FLIP animation
+      requestAnimationFrame(() => {
+        // Measure destination heights at column width (the expensive DOM measurement)
+        animateFlip(
+          activeNodeIds,
+          container,
+          NODE_WIDTH_COLUMN,
+          (heights) => setNodeHeights((prev) => ({ ...prev, ...heights })),
+          400
+        ).then(() => {
+          setIsAnimating(false);
+        });
+      });
     } else {
-      // Restore saved free-form positions
+      // Restore freeform positions
       setIsAnimating(true);
+      setLayoutMode("canvas");
+
       if (Object.keys(savedFreeformPositions.current).length > 0) {
         setPositions(savedFreeformPositions.current);
       }
-      setLayoutMode("canvas");
-      setTimeout(() => setIsAnimating(false), 450);
-    }
-  }, [layoutMode, positions, readingOrder, columnCenterX, nodeHeights]);
 
-  // Cursor tool cycling via scroll (only when not over a node with selection)
+      requestAnimationFrame(() => {
+        animateFlip(
+          activeNodeIds,
+          container,
+          NODE_WIDTH_CANVAS,
+          (heights) => setNodeHeights((prev) => ({ ...prev, ...heights })),
+          400
+        ).then(() => {
+          setIsAnimating(false);
+        });
+      });
+    }
+  }, [
+    layoutMode,
+    positions,
+    readingOrder,
+    columnCenterX,
+    nodeHeights,
+    activeNodeIds,
+    containerRef,
+    snapshotFirst,
+    animateFlip,
+  ]);
+
+  // Cursor tool cycling via scroll
   const handleToolScroll = useCallback(
     (e: React.WheelEvent) => {
-      // Don't cycle if Ctrl is held (that's zoom)
       if (e.ctrlKey || e.metaKey) return;
 
-      // Check if there's a text selection (minimum 1 word)
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim().length >= 2) {
-        // Selection active — scroll should do local reroll (Phase 2)
         return;
       }
 
@@ -216,7 +260,7 @@ export default function CanvasView({
     []
   );
 
-  // Keyboard shortcuts for tools
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
@@ -233,6 +277,12 @@ export default function CanvasView({
           break;
         case "0":
           resetView();
+          break;
+        case "p":
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            setShowPerfOverlay((v) => !v);
+          }
           break;
       }
     };
@@ -259,18 +309,28 @@ export default function CanvasView({
     [tree.nodes, onNodeEdit]
   );
 
-  // --- Canvas click handler (pan in hand mode) ---
+  // --- Canvas click handler ---
   const handleCanvasPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      // Only if clicking the canvas itself, not a node
       if (e.target === e.currentTarget && cursorTool === "hand") {
         startCanvasPan(e);
       }
-      // Also handle middle-click pan regardless of tool
       panZoomHandlers.onPointerDown(e);
     },
     [cursorTool, startCanvasPan, panZoomHandlers]
   );
+
+  // --- Perf stats for overlay ---
+  const perfStats = useMemo(() => {
+    if (!showPerfOverlay) return null;
+    return {
+      measureHeights: getStats("measure-heights"),
+      flipSnapshot: getStats("flip-snapshot"),
+      flipApply: getStats("flip-apply"),
+      fullTransition: getStats("full-transition"),
+      report: getReport(),
+    };
+  }, [showPerfOverlay, isAnimating]); // re-compute after transitions
 
   const cursorClass =
     cursorTool === "hand"
@@ -285,7 +345,7 @@ export default function CanvasView({
       className={`relative w-full h-full overflow-hidden bg-stone-950 ${cursorClass}`}
       onWheel={handleToolScroll}
     >
-      {/* Toolbar — viewport space (not transformed) */}
+      {/* Toolbar — viewport space */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3">
         <CursorToolSwitcher
           activeTool={cursorTool}
@@ -310,19 +370,99 @@ export default function CanvasView({
         >
           1:1
         </button>
+
+        <button
+          onClick={() => setShowPerfOverlay((v) => !v)}
+          className={`px-2 py-1.5 text-xs rounded-lg border transition-colors ${
+            showPerfOverlay
+              ? "bg-amber-900/50 border-amber-700 text-amber-300"
+              : "bg-stone-900/90 border-stone-700 text-stone-600 hover:text-stone-400"
+          }`}
+          title="Toggle perf overlay (Ctrl+P)"
+        >
+          perf
+        </button>
       </div>
 
-      {/* Reading order legend — bottom left */}
+      {/* Status bar — bottom left */}
       <div className="absolute bottom-3 left-3 z-30 text-[10px] text-stone-600">
         {readingOrder.length} blocks in context
-        {readingOrder.length > 0 && (
-          <span className="ml-2">
-            · zoom {Math.round(panZoom.zoom * 100)}%
-          </span>
-        )}
+        <span className="ml-2">· zoom {Math.round(panZoom.zoom * 100)}%</span>
+        <span className="ml-2">· {nodeWidth}px wide</span>
       </div>
 
-      {/* Transform container — this is where pan/zoom happens */}
+      {/* Performance overlay */}
+      {showPerfOverlay && perfStats && (
+        <div className="absolute top-14 right-3 z-40 bg-stone-900/95 border border-stone-700 rounded-lg p-3 text-[10px] font-mono text-stone-400 max-w-xs backdrop-blur-sm">
+          <div className="text-stone-300 mb-2 text-xs">Layout Performance</div>
+
+          {perfStats.fullTransition && (
+            <div className="mb-2">
+              <div className="text-amber-400">full-transition</div>
+              <div>avg: {perfStats.fullTransition.avgMs.toFixed(1)}ms</div>
+              <div>max: {perfStats.fullTransition.maxMs.toFixed(1)}ms</div>
+              <div>p95: {perfStats.fullTransition.p95Ms.toFixed(1)}ms</div>
+              <div>samples: {perfStats.fullTransition.count}</div>
+            </div>
+          )}
+
+          {perfStats.measureHeights && (
+            <div className="mb-2">
+              <div className="text-blue-400">measure-heights (DOM reflow)</div>
+              <div>avg: {perfStats.measureHeights.avgMs.toFixed(2)}ms</div>
+              <div>max: {perfStats.measureHeights.maxMs.toFixed(2)}ms</div>
+              <div>p95: {perfStats.measureHeights.p95Ms.toFixed(2)}ms</div>
+              <div>avg nodes: {perfStats.measureHeights.avgNodesPerOp.toFixed(0)}</div>
+            </div>
+          )}
+
+          {perfStats.flipSnapshot && (
+            <div className="mb-2">
+              <div className="text-green-400">flip-snapshot (getBoundingClientRect)</div>
+              <div>avg: {perfStats.flipSnapshot.avgMs.toFixed(2)}ms</div>
+              <div>max: {perfStats.flipSnapshot.maxMs.toFixed(2)}ms</div>
+            </div>
+          )}
+
+          {perfStats.flipApply && (
+            <div className="mb-2">
+              <div className="text-purple-400">flip-apply (Web Animations)</div>
+              <div>avg: {perfStats.flipApply.avgMs.toFixed(2)}ms</div>
+              <div>max: {perfStats.flipApply.maxMs.toFixed(2)}ms</div>
+            </div>
+          )}
+
+          {/* Verdict */}
+          <div className="mt-2 pt-2 border-t border-stone-700">
+            {perfStats.measureHeights && perfStats.measureHeights.p95Ms > 8 ? (
+              <div className="text-red-400">
+                DOM measurement p95 &gt; 8ms — Pretext would help
+              </div>
+            ) : perfStats.measureHeights && perfStats.measureHeights.p95Ms > 4 ? (
+              <div className="text-amber-400">
+                DOM measurement p95 4-8ms — borderline
+              </div>
+            ) : perfStats.measureHeights ? (
+              <div className="text-green-400">
+                DOM measurement p95 &lt; 4ms — Pretext not needed
+              </div>
+            ) : (
+              <div className="text-stone-500">
+                Toggle layout to collect measurements
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => console.log(perfStats.report)}
+            className="mt-2 text-stone-500 hover:text-stone-300 underline"
+          >
+            dump to console
+          </button>
+        </div>
+      )}
+
+      {/* Transform container */}
       <div
         ref={containerRef}
         className="absolute inset-0"
@@ -334,7 +474,7 @@ export default function CanvasView({
         onPointerMove={panZoomHandlers.onPointerMove}
         onPointerUp={panZoomHandlers.onPointerUp}
       >
-        {/* Column indicator — faint vertical band */}
+        {/* Column indicator */}
         <div
           className="absolute pointer-events-none"
           style={{
@@ -369,7 +509,7 @@ export default function CanvasView({
               inContext={inContextNodeIds.includes(nodeId)}
               isAnimating={isAnimating}
               cursorTool={cursorTool}
-              nodeWidth={NODE_WIDTH}
+              nodeWidth={nodeWidth}
               zoom={panZoom.zoom}
               onTextDrop={handleTextDrop}
               onEdit={onNodeEdit}
@@ -380,12 +520,12 @@ export default function CanvasView({
         {/* Ghost node */}
         <GhostNode
           position={ghostPosition}
-          nodeWidth={NODE_WIDTH}
+          nodeWidth={nodeWidth}
           onGenerate={onGenerate}
           isGenerating={isGenerating}
         />
 
-        {/* Reading order badges (rendered as absolute overlays) */}
+        {/* Reading order badges */}
         {readingOrder.map((nodeId) => {
           const pos = positions[nodeId];
           if (!pos) return null;

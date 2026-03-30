@@ -205,12 +205,13 @@ export default function CanvasNode({
         (nodeRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
         measuredRef(el);
       }}
+      data-node-id={node.id}
       className={`absolute select-none ${cursorClass}`}
       style={{
         left: position.x,
         top: position.y,
         width: nodeWidth,
-        transition: isAnimating ? "left 400ms ease-out, top 400ms ease-out" : "none",
+        transition: isAnimating ? "left 400ms ease-out, top 400ms ease-out, width 400ms ease-out" : "none",
         zIndex: isDraggingNode.current ? 50 : 1,
       }}
       onPointerDown={handlePointerDown}
