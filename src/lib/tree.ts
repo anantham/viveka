@@ -253,3 +253,103 @@ export function getDepth(tree: ConversationTree, nodeId: string): number {
   }
   return depth;
 }
+
+/**
+ * Create a sibling node (same parent, same role) with modified content.
+ * Used by phrase reroll to create alternative versions of a node.
+ */
+export function duplicateNodeWithEdit(
+  tree: ConversationTree,
+  nodeId: string,
+  newContent: string
+): TreeNode | null {
+  const original = tree.nodes[nodeId];
+  if (!original || !original.parentId) return null;
+
+  const sibling = addNode(
+    tree,
+    original.parentId,
+    original.role,
+    newContent,
+    original.source,
+    "complete"
+  );
+  sibling.model = original.model;
+  return sibling;
+}
+
+// --- Split node mid-text (tangent/star mode) ---
+
+/**
+ * Snap a character position to the nearest word boundary.
+ * Looks for the nearest space or punctuation character within a small window
+ * around the given position, preferring to break at whitespace.
+ */
+export function snapToWordBoundary(text: string, charPosition: number): number {
+  // Clamp to valid range
+  if (charPosition <= 0) return 0;
+  if (charPosition >= text.length) return text.length;
+
+  const SNAP_WINDOW = 15; // max chars to search in each direction
+  const wordBoundaryPattern = /[\s.,;:!?\-—–\/)}\]]/;
+
+  // Look backwards first (prefer breaking before a word)
+  for (let i = charPosition; i >= Math.max(0, charPosition - SNAP_WINDOW); i--) {
+    if (wordBoundaryPattern.test(text[i])) {
+      // Snap to after the boundary character (keep punctuation with the truncated part)
+      return i + 1;
+    }
+  }
+
+  // Look forwards if no boundary found backwards
+  for (let i = charPosition; i <= Math.min(text.length - 1, charPosition + SNAP_WINDOW); i++) {
+    if (wordBoundaryPattern.test(text[i])) {
+      return i;
+    }
+  }
+
+  // No boundary found at all — use the raw position
+  return charPosition;
+}
+
+/**
+ * Split a node's content at a given character position.
+ * - Truncates the original node's content at the (word-snapped) position, appending "..."
+ * - Saves the original content as a previous version
+ * - Creates a new empty child node (role: "user", source: "human", status: "complete")
+ * - Updates activePathIds to include the new child
+ *
+ * Returns the updated parent node and the new child node.
+ */
+export function splitNodeAtPosition(
+  tree: ConversationTree,
+  nodeId: string,
+  charPosition: number
+): { parentNode: TreeNode; childNode: TreeNode } | null {
+  const node = tree.nodes[nodeId];
+  if (!node) return null;
+
+  // Don't split empty nodes or nodes with trivially short content
+  if (!node.content || node.content.length < 2) return null;
+
+  // Snap to nearest word boundary
+  const splitAt = snapToWordBoundary(node.content, charPosition);
+
+  // Don't split at the very beginning or very end
+  if (splitAt <= 0 || splitAt >= node.content.length) return null;
+
+  const truncatedContent = node.content.slice(0, splitAt).trimEnd() + "...";
+
+  // Save original content as a previous version before truncating
+  node.previousVersions.push(node.content);
+  node.version++;
+  node.content = truncatedContent;
+
+  // Create new empty child node for the user's tangent/interruption
+  const childNode = addNode(tree, nodeId, "user", "", "human", "complete");
+
+  // Update active path to include the new child
+  selectNode(tree, childNode.id);
+
+  return { parentNode: node, childNode };
+}

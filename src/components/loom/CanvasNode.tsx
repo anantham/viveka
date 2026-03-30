@@ -14,9 +14,12 @@ interface CanvasNodeProps {
   cursorTool: CursorTool;
   nodeWidth: number;
   zoom: number;
+  treeId?: string;
   onTextDragStart?: (nodeId: string, text: string, sourceRange: { start: number; end: number }) => void;
   onTextDrop?: (targetNodeId: string, insertPosition: number, text: string) => void;
   onEdit?: (nodeId: string, content: string) => void;
+  onRerollComplete?: () => void;
+  onTangentSplit?: (nodeId: string, charPosition: number) => void;
 }
 
 export default function CanvasNode({
@@ -29,9 +32,12 @@ export default function CanvasNode({
   cursorTool,
   nodeWidth,
   zoom,
+  treeId,
   onTextDragStart,
   onTextDrop,
   onEdit,
+  onRerollComplete,
+  onTangentSplit,
 }: CanvasNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const isDraggingNode = useRef(false);
@@ -39,6 +45,8 @@ export default function CanvasNode({
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(node.content);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isRerolling, setIsRerolling] = useState(false);
+  const rerollDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Measure height after render
   const measuredRef = useCallback(
@@ -158,6 +166,63 @@ export default function CanvasNode({
     [node.id, node.content.length, onTextDrop]
   );
 
+  // --- Phrase reroll on scroll (Select mode with active text selection) ---
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (cursorTool !== "select") return;
+      if (isEditing || isRerolling) return;
+      if (!treeId) return;
+
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) return;
+
+      const selectedText = selection.toString().trim();
+      if (selectedText.length < 2) return;
+
+      // Verify the selection is within this node
+      const anchorEl = selection.anchorNode?.parentElement?.closest("[data-node-id]");
+      if (anchorEl?.getAttribute("data-node-id") !== node.id) return;
+
+      // Prevent default scroll behavior when reroll conditions are met
+      e.stopPropagation();
+
+      // Debounce: wait for scroll to settle before firing API call
+      if (rerollDebounceRef.current) {
+        clearTimeout(rerollDebounceRef.current);
+      }
+
+      rerollDebounceRef.current = setTimeout(async () => {
+        setIsRerolling(true);
+        try {
+          const res = await fetch("/api/tree/reroll-phrase", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              treeId,
+              nodeId: node.id,
+              selectedText,
+              fullContent: node.content,
+              count: 5,
+            }),
+          });
+          const data = await res.json();
+          if (data.error) {
+            console.error("[viveka-loom] reroll-phrase error:", data.error);
+          } else {
+            // Clear selection after successful reroll
+            selection.removeAllRanges();
+            onRerollComplete?.();
+          }
+        } catch (err) {
+          console.error("[viveka-loom] reroll-phrase fetch error:", err);
+        } finally {
+          setIsRerolling(false);
+        }
+      }, 300);
+    },
+    [cursorTool, isEditing, isRerolling, treeId, node.id, node.content, onRerollComplete]
+  );
+
   // --- Inline editing ---
   const handleDoubleClick = useCallback(() => {
     if (cursorTool === "select") {
@@ -184,6 +249,79 @@ export default function CanvasNode({
       }
     },
     [node.content, handleEditSave]
+  );
+
+  // --- Tangent mode: click to split node mid-text ---
+  const handleTangentClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (cursorTool !== "tangent") return;
+      if (isEditing) return;
+      if (!onTangentSplit) return;
+      if (!node.content || node.content.length < 2) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Determine character position at click point using caretRangeFromPoint / caretPositionFromPoint
+      let charOffset: number | null = null;
+
+      if (document.caretRangeFromPoint) {
+        // Chrome, Safari, Edge
+        const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+        if (range) {
+          // Walk up to find the content container (the whitespace-pre-wrap div)
+          const container = (e.currentTarget as HTMLElement).querySelector(".whitespace-pre-wrap");
+          if (container && container.contains(range.startContainer)) {
+            // Calculate total offset within the text content
+            const treeWalker = document.createTreeWalker(
+              container,
+              NodeFilter.SHOW_TEXT,
+              null
+            );
+            let offset = 0;
+            let textNode = treeWalker.nextNode();
+            while (textNode) {
+              if (textNode === range.startContainer) {
+                offset += range.startOffset;
+                break;
+              }
+              offset += (textNode.textContent?.length ?? 0);
+              textNode = treeWalker.nextNode();
+            }
+            charOffset = offset;
+          }
+        }
+      } else if ((document as unknown as { caretPositionFromPoint: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint) {
+        // Firefox
+        const caretPos = (document as unknown as { caretPositionFromPoint: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint(e.clientX, e.clientY);
+        if (caretPos) {
+          const container = (e.currentTarget as HTMLElement).querySelector(".whitespace-pre-wrap");
+          if (container && container.contains(caretPos.offsetNode)) {
+            const treeWalker = document.createTreeWalker(
+              container,
+              NodeFilter.SHOW_TEXT,
+              null
+            );
+            let offset = 0;
+            let textNode = treeWalker.nextNode();
+            while (textNode) {
+              if (textNode === caretPos.offsetNode) {
+                offset += caretPos.offset;
+                break;
+              }
+              offset += (textNode.textContent?.length ?? 0);
+              textNode = treeWalker.nextNode();
+            }
+            charOffset = offset;
+          }
+        }
+      }
+
+      if (charOffset !== null && charOffset > 0 && charOffset < node.content.length) {
+        onTangentSplit(node.id, charOffset);
+      }
+    },
+    [cursorTool, isEditing, onTangentSplit, node.id, node.content]
   );
 
   // Skip system nodes
@@ -217,12 +355,14 @@ export default function CanvasNode({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onClick={handleTangentClick}
       onDoubleClick={handleDoubleClick}
       draggable={cursorTool === "hand"}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onWheel={handleWheel}
     >
       <div
         className={`rounded-xl border px-4 py-3 text-sm leading-relaxed transition-all ${
@@ -238,7 +378,7 @@ export default function CanvasNode({
             ? "ring-2 ring-amber-500/50 border-amber-500/50"
             : ""
         } ${
-          isGenerating ? "animate-pulse" : ""
+          isGenerating || isRerolling ? "animate-pulse" : ""
         }`}
       >
         {/* Role label */}
@@ -250,6 +390,9 @@ export default function CanvasNode({
           {isUser ? "human" : "assistant"}
           {node.version > 1 && (
             <span className="ml-2 text-stone-600">v{node.version}</span>
+          )}
+          {isRerolling && (
+            <span className="ml-2 text-amber-500 animate-pulse">rerolling...</span>
           )}
         </div>
 

@@ -10,6 +10,7 @@ import {
   computeColumnPositions,
   computeGhostPosition,
   computePathPoints,
+  computeJunctionEdges,
   isInContext,
 } from "@/lib/canvas-utils";
 import { usePanZoom } from "@/hooks/usePanZoom";
@@ -23,8 +24,10 @@ import GhostNode from "./GhostNode";
 interface CanvasViewProps {
   tree: ConversationTree;
   onGenerate: () => void;
+  onSubmitMessage: (text: string) => void;
   onNodeSelect: (nodeId: string) => void;
   onNodeEdit: (nodeId: string, content: string) => void;
+  onRefreshTree?: () => void;
   isGenerating: boolean;
 }
 
@@ -37,8 +40,10 @@ const COLUMN_CENTER_FALLBACK = 600;
 export default function CanvasView({
   tree,
   onGenerate,
+  onSubmitMessage,
   onNodeSelect,
   onNodeEdit,
+  onRefreshTree,
   isGenerating,
 }: CanvasViewProps) {
   const activePath = getActivePath(tree);
@@ -152,6 +157,19 @@ export default function CanvasView({
     });
     return map;
   }, [readingOrder]);
+
+  // Junction edges: detect fork points in the tree where a node has multiple children
+  const junctionEdges = useMemo(
+    () =>
+      computeJunctionEdges(
+        tree.nodes,
+        activeNodeIds,
+        positions,
+        nodeWidth,
+        nodeHeights
+      ),
+    [tree.nodes, activeNodeIds, positions, nodeWidth, nodeHeights]
+  );
 
   // --- Handlers ---
 
@@ -294,37 +312,34 @@ export default function CanvasView({
     [tree.nodes, onNodeEdit]
   );
 
-  // --- Tangent tool: select text → extract as new node ---
-  const handleTangentExtract = useCallback(() => {
-    if (cursorTool !== "tangent") return;
-
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed) return;
-
-    const selectedText = selection.toString().trim();
-    if (selectedText.length < 2) return;
-
-    // Find which node the selection is in
-    const anchorEl = selection.anchorNode?.parentElement?.closest("[data-node-id]");
-    const sourceNodeId = anchorEl?.getAttribute("data-node-id");
-
-    if (sourceNodeId && tree.nodes[sourceNodeId]) {
-      // Create a new tangent node via API
-      fetch("/api/tree/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          treeId: tree.id,
-          parentId: sourceNodeId,
-          userMessage: selectedText,
-          count: 1,
-        }),
-      }).then(() => {
-        // Clear selection
-        selection.removeAllRanges();
-      });
-    }
-  }, [cursorTool, tree]);
+  // --- Tangent tool: click within node text → split node at that position ---
+  const handleTangentSplit = useCallback(
+    async (nodeId: string, charPosition: number) => {
+      try {
+        const res = await fetch("/api/tree/split", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            treeId: tree.id,
+            nodeId,
+            charPosition,
+          }),
+        });
+        const data = await res.json();
+        if (!data.error) {
+          // Refresh tree to reflect the split
+          if (onRefreshTree) {
+            onRefreshTree();
+          }
+        } else {
+          console.warn("[viveka-loom] tangent split failed:", data.error);
+        }
+      } catch (err) {
+        console.error("[viveka-loom] tangent split error:", err);
+      }
+    },
+    [tree.id, onRefreshTree]
+  );
 
   // --- Canvas click handler ---
   const handleCanvasPointerDown = useCallback(
@@ -488,11 +503,7 @@ export default function CanvasView({
         }}
         onPointerDown={handleCanvasPointerDown}
         onPointerMove={panZoomHandlers.onPointerMove}
-        onPointerUp={(e) => {
-          panZoomHandlers.onPointerUp(e);
-          // After pointer up, check for tangent text extraction
-          setTimeout(handleTangentExtract, 10);
-        }}
+        onPointerUp={panZoomHandlers.onPointerUp}
       >
         {/* Column indicator */}
         <div
@@ -511,6 +522,7 @@ export default function CanvasView({
         <ReadingPath
           points={pathPoints}
           ghostPoint={readingOrder.length > 0 ? ghostPathPoint : undefined}
+          junctionEdges={junctionEdges}
         />
 
         {/* Nodes */}
@@ -531,8 +543,11 @@ export default function CanvasView({
               cursorTool={cursorTool}
               nodeWidth={nodeWidth}
               zoom={panZoom.zoom}
+              treeId={tree.id}
               onTextDrop={handleTextDrop}
               onEdit={onNodeEdit}
+              onRerollComplete={onRefreshTree}
+              onTangentSplit={handleTangentSplit}
             />
           );
         })}
@@ -542,6 +557,7 @@ export default function CanvasView({
           position={ghostPosition}
           nodeWidth={nodeWidth}
           onGenerate={onGenerate}
+          onSubmitMessage={onSubmitMessage}
           isGenerating={isGenerating}
         />
 

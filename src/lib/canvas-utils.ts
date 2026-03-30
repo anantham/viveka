@@ -166,3 +166,83 @@ export function buildPathD(points: PathPoint[]): string {
     .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
     .join(" ");
 }
+
+// --- Junction detection ---
+
+export interface JunctionEdge {
+  /** The parent node ID at the fork */
+  parentId: string;
+  /** The child node ID */
+  childId: string;
+  /** Start point (bottom-center of parent) */
+  from: PathPoint;
+  /** End point (top-center of child) */
+  to: PathPoint;
+  /** Whether this child is on the active/selected path */
+  isActive: boolean;
+}
+
+/**
+ * Detect junction nodes (nodes with multiple non-pruned children) and compute
+ * the edge lines from parent to each child at that junction.
+ *
+ * @param nodes - all tree nodes keyed by ID
+ * @param activeNodeIds - set of node IDs currently on the active path
+ * @param positions - current canvas positions for all visible nodes
+ * @param nodeWidth - current node width (for centering)
+ * @param nodeHeights - measured node heights
+ */
+export function computeJunctionEdges(
+  nodes: Record<string, { id: string; childIds: string[]; parentId: string | null; pruned: boolean; role: string }>,
+  activeNodeIds: string[],
+  positions: NodePositions,
+  nodeWidth: number,
+  nodeHeights: Record<string, number>
+): JunctionEdge[] {
+  const activeSet = new Set(activeNodeIds);
+  const edges: JunctionEdge[] = [];
+
+  for (const id of activeNodeIds) {
+    const node = nodes[id];
+    if (!node) continue;
+
+    // Only consider nodes with multiple non-pruned, non-system children
+    const visibleChildren = node.childIds.filter((cid) => {
+      const child = nodes[cid];
+      return child && !child.pruned && child.role !== "system";
+    });
+
+    if (visibleChildren.length < 2) continue;
+
+    const parentPos = positions[id];
+    if (!parentPos) continue;
+    const parentHeight = nodeHeights[id] ?? 80;
+
+    // Bottom-center of parent
+    const fromPoint: PathPoint = {
+      x: parentPos.x + nodeWidth / 2,
+      y: parentPos.y + parentHeight,
+    };
+
+    for (const childId of visibleChildren) {
+      const childPos = positions[childId];
+      if (!childPos) continue;
+
+      // Top-center of child
+      const toPoint: PathPoint = {
+        x: childPos.x + nodeWidth / 2,
+        y: childPos.y,
+      };
+
+      edges.push({
+        parentId: id,
+        childId,
+        from: fromPoint,
+        to: toPoint,
+        isActive: activeSet.has(childId),
+      });
+    }
+  }
+
+  return edges;
+}

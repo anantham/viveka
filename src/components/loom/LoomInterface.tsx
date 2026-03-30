@@ -276,8 +276,10 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
                   }
                 }
               }}
+              onSubmitMessage={sendUserMessage}
               onNodeSelect={handleNodeSelect}
               onNodeEdit={handleEdit}
+              onRefreshTree={refreshTree}
               isGenerating={hasGenerating}
             />
           </div>
