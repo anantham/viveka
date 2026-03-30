@@ -32,6 +32,7 @@ export interface ConversationTree {
     model: string;
   };
   contextBlockIds: string[]; // references to context library blocks
+  canvasPositions?: Record<string, { x: number; y: number }>; // free-form node positions for canvas view
 }
 
 // --- Tree operations ---

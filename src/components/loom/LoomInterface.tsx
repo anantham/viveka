@@ -4,12 +4,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ConversationTree, getActivePath, getSiblings } from "@/lib/tree";
 import ChatBubbleView from "./ChatBubbleView";
 import TreeMapView from "./TreeMapView";
+import CanvasView from "./CanvasView";
 
 interface LoomInterfaceProps {
   initialTree: ConversationTree;
 }
 
-type View = "chat" | "tree" | "split";
+type View = "chat" | "tree" | "split" | "canvas";
 
 export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [tree, setTree] = useState(initialTree);
@@ -223,7 +224,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {(["chat", "split", "tree"] as const).map((v) => (
+          {(["chat", "split", "tree", "canvas"] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -246,6 +247,28 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
+        {/* Canvas view */}
+        {view === "canvas" && (
+          <div className="w-full h-full">
+            <CanvasView
+              tree={tree}
+              onGenerate={() => {
+                if (lastNode) {
+                  if (lastNode.role === "assistant" || lastNode.role === "system") {
+                    // Need user input first — focus the input
+                    inputRef.current?.focus();
+                  } else {
+                    handleReroll();
+                  }
+                }
+              }}
+              onNodeSelect={handleNodeSelect}
+              onNodeEdit={handleEdit}
+              isGenerating={hasGenerating}
+            />
+          </div>
+        )}
+
         {/* Chat bubble view */}
         {(view === "chat" || view === "split") && (
           <div
