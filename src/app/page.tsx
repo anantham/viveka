@@ -9,7 +9,7 @@ export default function Home() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [interfaceMode, setInterfaceMode] = useState<"linear" | "loom">("loom");
+  const [interfaceMode, setInterfaceMode] = useState<"linear" | "loom" | "dump">("loom");
 
   const handleSubmit = async (data: {
     intent: string;
@@ -21,7 +21,21 @@ export default function Home() {
     setError(null);
 
     try {
-      if (interfaceMode === "loom") {
+      if (interfaceMode === "dump") {
+        // Create a freeform dump — no form needed, just go
+        const res = await fetch("/api/dump/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: data.intent || undefined }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          setError(err.error || "Failed to create dump");
+          return;
+        }
+        const tree = await res.json();
+        router.push(`/dump/${tree.id}`);
+      } else if (interfaceMode === "loom") {
         // Create a tree-based session
         const res = await fetch("/api/tree/create", {
           method: "POST",
@@ -75,7 +89,7 @@ export default function Home() {
 
       {/* Interface mode toggle */}
       <div className="flex gap-2 mb-4">
-        {(["loom", "linear"] as const).map((m) => (
+        {(["dump", "loom", "linear"] as const).map((m) => (
           <button
             key={m}
             onClick={() => setInterfaceMode(m)}
@@ -85,12 +99,54 @@ export default function Home() {
                 : "bg-stone-800 border-stone-700 text-stone-500 hover:text-stone-400"
             }`}
           >
-            {m === "loom" ? "LOOM (tree)" : "Linear (chat)"}
+            {m === "dump" ? "Dump (freeform)" : m === "loom" ? "LOOM (tree)" : "Linear (chat)"}
           </button>
         ))}
       </div>
 
-      <SessionForm onSubmit={handleSubmit} loading={loading} />
+      {interfaceMode === "dump" ? (
+        <div className="max-w-lg w-full">
+          <div className="border border-stone-700 rounded-lg p-6 space-y-4 bg-stone-900/50">
+            <h2 className="text-sm font-medium text-stone-400 uppercase tracking-wider">
+              Freeform Dump
+            </h2>
+            <p className="text-xs text-stone-600">
+              No questions. No structure. Just write. Auto-saves as you go.
+            </p>
+            <input
+              type="text"
+              placeholder="Optional title (e.g. 'bath insight about standing waves')"
+              className="w-full bg-stone-800 border border-stone-600 rounded px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  handleSubmit({
+                    intent: (e.target as HTMLInputElement).value,
+                    completionCondition: "thought externalized",
+                    mode: "reflective",
+                    budget: 999,
+                  });
+                }
+              }}
+            />
+            <button
+              onClick={() =>
+                handleSubmit({
+                  intent: "",
+                  completionCondition: "thought externalized",
+                  mode: "reflective",
+                  budget: 999,
+                })
+              }
+              disabled={loading}
+              className="w-full py-2 text-sm bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 transition-colors disabled:opacity-50"
+            >
+              {loading ? "Creating..." : "Begin writing"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <SessionForm onSubmit={handleSubmit} loading={loading} />
+      )}
 
       {error && (
         <p className="mt-4 text-xs text-red-400">{error}</p>
