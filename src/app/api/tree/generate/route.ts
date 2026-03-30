@@ -74,30 +74,44 @@ export async function POST(req: NextRequest) {
   // Fire N parallel completions
   const nodeIds = pendingNodes.map((n) => n.id);
 
-  // Don't await — let them run in background
+  // Don't await — let them run in background with timing
   Promise.all(
     pendingNodes.map(async (pendingNode) => {
+      const startedAt = new Date().toISOString();
+      const startMs = Date.now();
       try {
         const response = await queryClaudeCode(
           promptMessage,
           systemPrompt,
-          // Don't include the last user message in history since it's the prompt
           history.slice(0, -1),
           { model, noTools: true }
         );
 
+        const durationMs = Date.now() - startMs;
         const freshTree = getTree(treeId);
         if (freshTree) {
           updateNodeContent(freshTree, pendingNode.id, response.text, "complete");
           freshTree.nodes[pendingNode.id].model = model;
+          freshTree.nodes[pendingNode.id].timing = {
+            startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs,
+          };
           saveTree(freshTree);
+          console.log(`[viveka-loom] completion ${pendingNode.id.slice(0, 8)} done in ${durationMs}ms`);
         }
       } catch (err) {
+        const durationMs = Date.now() - startMs;
         const freshTree = getTree(treeId);
         if (freshTree && freshTree.nodes[pendingNode.id]) {
           freshTree.nodes[pendingNode.id].status = "error";
           freshTree.nodes[pendingNode.id].error =
             err instanceof Error ? err.message : String(err);
+          freshTree.nodes[pendingNode.id].timing = {
+            startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs,
+          };
           saveTree(freshTree);
         }
       }

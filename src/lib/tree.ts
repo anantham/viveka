@@ -15,6 +15,11 @@ export interface TreeNode {
   createdAt: string;
   model?: string;
   error?: string;
+  timing?: {
+    startedAt: string;
+    completedAt: string;
+    durationMs: number;
+  };
 }
 
 export interface ConversationTree {

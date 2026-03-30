@@ -46,6 +46,8 @@ export async function POST(req: NextRequest) {
 
 Return ONLY the suggested user message, nothing else. No quotes, no explanation, no "The user might say:" prefix. Just the raw message text as if the user typed it.`;
 
+      const startedAt = new Date().toISOString();
+      const startMs = Date.now();
       try {
         const response = await queryClaudeCode(
           draftPrompt,
@@ -54,17 +56,30 @@ Return ONLY the suggested user message, nothing else. No quotes, no explanation,
           { model, noTools: true }
         );
 
+        const durationMs = Date.now() - startMs;
         const freshTree = getTree(treeId);
         if (freshTree) {
           updateNodeContent(freshTree, pendingNode.id, response.text, "complete");
+          freshTree.nodes[pendingNode.id].timing = {
+            startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs,
+          };
           saveTree(freshTree);
+          console.log(`[viveka-loom] draft ${pendingNode.id.slice(0, 8)} done in ${durationMs}ms`);
         }
       } catch (err) {
+        const durationMs = Date.now() - startMs;
         const freshTree = getTree(treeId);
         if (freshTree && freshTree.nodes[pendingNode.id]) {
           freshTree.nodes[pendingNode.id].status = "error";
           freshTree.nodes[pendingNode.id].error =
             err instanceof Error ? err.message : String(err);
+          freshTree.nodes[pendingNode.id].timing = {
+            startedAt,
+            completedAt: new Date().toISOString(),
+            durationMs,
+          };
           saveTree(freshTree);
         }
       }
