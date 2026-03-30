@@ -146,6 +146,40 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
     window.location.href = `/loom/${tree.id}`;
   };
 
+  // Incubate mode — timer, silence, then one soft synthesis
+  const [incubating, setIncubating] = useState(false);
+  const [incubateSeconds, setIncubateSeconds] = useState(0);
+  const [incubateDuration, setIncubateDuration] = useState(180); // 3 min default
+  const incubateRef = useRef<NodeJS.Timeout | null>(null);
+
+  const startIncubate = useCallback((durationSec: number = 180) => {
+    setIncubating(true);
+    setIncubateSeconds(0);
+    setIncubateDuration(durationSec);
+
+    incubateRef.current = setInterval(() => {
+      setIncubateSeconds((prev) => {
+        if (prev + 1 >= durationSec) {
+          if (incubateRef.current) clearInterval(incubateRef.current);
+          // Don't auto-exit — let user decide when they're ready
+          return durationSec;
+        }
+        return prev + 1;
+      });
+    }, 1000);
+  }, []);
+
+  const stopIncubate = useCallback(() => {
+    setIncubating(false);
+    if (incubateRef.current) clearInterval(incubateRef.current);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (incubateRef.current) clearInterval(incubateRef.current);
+    };
+  }, []);
+
   // Expand mode — AI widens the thought-space
   const [expanding, setExpanding] = useState(false);
   const [expansions, setExpansions] = useState<Array<{ id: string; content: string; mode: string }>>([]);
@@ -252,6 +286,12 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
                 ))}
               </div>
               <button
+                onClick={() => startIncubate(180)}
+                className="text-xs px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 transition-colors"
+              >
+                ◯ sit
+              </button>
+              <button
                 onClick={handleExpandToLoom}
                 className="text-xs px-2 py-0.5 rounded border border-emerald-800 text-emerald-500 hover:text-emerald-400 hover:border-emerald-700 transition-colors"
               >
@@ -304,8 +344,81 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
         </div>
       )}
 
-      {/* Previous blocks — faded, scrollable */}
-      {blocks.length > 0 && (
+      {/* Incubate mode — silence, timer, soft return */}
+      {incubating && (
+        <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
+          {/* Timer */}
+          <div className="text-4xl text-stone-600 tabular-nums font-light mb-8">
+            {Math.floor(incubateSeconds / 60)}:{(incubateSeconds % 60).toString().padStart(2, "0")}
+          </div>
+
+          {/* Progress — very subtle */}
+          <div className="w-48 h-px bg-stone-800 mb-8">
+            <div
+              className="h-full bg-stone-700 transition-all duration-1000"
+              style={{ width: `${(incubateSeconds / incubateDuration) * 100}%` }}
+            />
+          </div>
+
+          {/* Soft prompt — only appears after timer completes */}
+          {incubateSeconds >= incubateDuration && (
+            <div className="text-center space-y-4 animate-[fadeIn_2s_ease-in]">
+              <p className="text-sm text-stone-600">
+                What is still alive?
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={stopIncubate}
+                  className="text-xs px-3 py-1.5 rounded border border-stone-700 text-stone-400 hover:text-stone-200 hover:border-stone-500 transition-colors"
+                >
+                  Return to writing
+                </button>
+                <button
+                  onClick={() => {
+                    stopIncubate();
+                    handleExpand("full");
+                  }}
+                  className="text-xs px-3 py-1.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 transition-colors"
+                >
+                  ✦ expand what emerged
+                </button>
+                <button
+                  onClick={() => startIncubate(300)}
+                  className="text-xs px-3 py-1.5 text-stone-700 hover:text-stone-500 transition-colors"
+                >
+                  +5 more minutes
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* During timer — one somatic prompt, very faint */}
+          {incubateSeconds < incubateDuration && (
+            <p className="text-xs text-stone-800 mt-4">
+              {incubateSeconds < 30
+                ? ""
+                : incubateSeconds < 60
+                  ? "Notice what is still moving."
+                  : incubateSeconds < 120
+                    ? ""
+                    : "What wants to be said next?"}
+            </p>
+          )}
+
+          {/* Early exit */}
+          {incubateSeconds < incubateDuration && (
+            <button
+              onClick={stopIncubate}
+              className="mt-8 text-xs text-stone-800 hover:text-stone-600 transition-colors"
+            >
+              return early
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Everything below is hidden during incubation */}
+      {!incubating && blocks.length > 0 && (
         <div className="px-6 py-4 space-y-3 border-b border-stone-800/20 max-h-[40vh] overflow-y-auto">
           {blocks.map((block) => (
             <div key={block.id} className="text-sm text-stone-500 leading-relaxed">
@@ -315,8 +428,8 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
         </div>
       )}
 
-      {/* The writing surface — the main event */}
-      <div className="flex-1 px-6 py-6">
+      {/* The writing surface — the main event (hidden during incubation) */}
+      {!incubating && <div className="flex-1 px-6 py-6">
         <textarea
           ref={textareaRef}
           value={text}
@@ -325,8 +438,9 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
           placeholder="Write freely. No questions will be asked. Auto-saves after 2 seconds of pause. Cmd+Enter to save immediately."
           className="w-full h-full min-h-[300px] bg-transparent text-stone-200 text-base leading-relaxed placeholder:text-stone-700 focus:outline-none resize-none"
         />
-      </div>
+      </div>}
 
+      {!incubating && <>
       {/* Expansions — AI-generated widening of the thought-space */}
       {(expansions.length > 0 || expanding) && (
         <div className="border-t border-stone-800/30">
@@ -371,6 +485,8 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
           ))}
         </div>
       )}
+
+      </>}
 
       {/* Footer — subtle stats */}
       <footer className="px-6 py-3 border-t border-stone-800/20 flex items-center justify-between text-xs text-stone-700">
