@@ -170,12 +170,14 @@ export default function CanvasNode({
     [node.id, node.content.length, onTextDrop]
   );
 
-  // --- Phrase reroll on scroll (Select mode with active text selection) ---
-  const handleWheel = useCallback(
-    (e: React.WheelEvent) => {
+  // --- Phrase reroll on arrow keys (Select mode with active text selection) ---
+  // Design: scroll always cycles tools. Arrow ↑↓ with selection = reroll.
+  const handleRerollKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
       if (cursorTool !== "select") return;
       if (isEditing || isRerolling) return;
       if (!treeId) return;
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
 
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed) return;
@@ -187,10 +189,11 @@ export default function CanvasNode({
       const anchorEl = selection.anchorNode?.parentElement?.closest("[data-node-id]");
       if (anchorEl?.getAttribute("data-node-id") !== node.id) return;
 
-      // Prevent default scroll behavior when reroll conditions are met
+      // Prevent default arrow behavior (cursor movement)
+      e.preventDefault();
       e.stopPropagation();
 
-      // Debounce: wait for scroll to settle before firing API call
+      // Debounce
       if (rerollDebounceRef.current) {
         clearTimeout(rerollDebounceRef.current);
       }
@@ -213,7 +216,6 @@ export default function CanvasNode({
           if (data.error) {
             console.error("[viveka-loom] reroll-phrase error:", data.error);
           } else {
-            // Clear selection after successful reroll
             selection.removeAllRanges();
             onRerollComplete?.();
           }
@@ -348,7 +350,8 @@ export default function CanvasNode({
         measuredRef(el);
       }}
       data-node-id={node.id}
-      className={`absolute ${cursorTool === "hand" ? "select-none" : "select-auto"} ${cursorClass}`}
+      tabIndex={0}
+      className={`absolute ${cursorTool === "hand" ? "select-none" : "select-auto"} ${cursorClass} focus:outline-none`}
       style={{
         left: position.x,
         top: position.y,
@@ -366,7 +369,7 @@ export default function CanvasNode({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onWheel={handleWheel}
+      onKeyDown={handleRerollKeyDown}
     >
       <div
         className={`rounded-xl border px-4 py-3 text-sm leading-relaxed transition-all ${
