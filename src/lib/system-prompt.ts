@@ -48,6 +48,9 @@ It is a tool for completing the user's declared intention.
 ## Response Constraints
 ${maxTokenNote}${formatNote}
 - Current exchange: ${exchangeNum} of ${session.budget}.
+- IMPORTANT: Provide exactly ONE response. Do not offer multiple options, alternatives, or numbered choices.
+  The interface handles branching externally by generating multiple parallel responses.
+  Each response should commit fully to ONE direction, tone, or approach.
 - If the response would substantially repeat content from a previous exchange in this session, instead output:
   "[Diminishing returns detected. This substantially overlaps with a previous exchange. Consider whether the session intent has been fulfilled.]"
 

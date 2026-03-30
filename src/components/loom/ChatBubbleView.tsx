@@ -81,12 +81,22 @@ export default function ChatBubbleView({
                 </div>
               )}
 
-              {/* Version indicator */}
-              {node.version > 1 && (
-                <div className="text-[10px] text-stone-600 mt-1">
-                  v{node.version}
-                </div>
-              )}
+              {/* Version + timing indicator */}
+              <div className="flex gap-2 mt-1">
+                {node.version > 1 && (
+                  <span className="text-[10px] text-stone-600">
+                    v{node.version}
+                  </span>
+                )}
+                {node.timing && (
+                  <span className="text-[10px] text-stone-700 tabular-nums">
+                    {node.timing.durationMs < 1000
+                      ? `${node.timing.durationMs}ms`
+                      : `${(node.timing.durationMs / 1000).toFixed(1)}s`}
+                    {node.model && ` · ${node.model}`}
+                  </span>
+                )}
+              </div>
 
               {/* Hover actions */}
               {!isEditing && node.status === "complete" && (

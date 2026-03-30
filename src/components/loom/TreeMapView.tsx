@@ -154,7 +154,7 @@ function NodeDot({
         className={`w-28 h-7 rounded-md border text-[10px] truncate px-1.5 transition-all ${colorClass} ${
           isOnPath ? "ring-1 ring-white/20" : ""
         } ${node.pruned ? "opacity-40" : ""} hover:brightness-125`}
-        title={`${node.role}: ${preview}`}
+        title={`${node.role}: ${preview}${node.timing ? ` (${node.timing.durationMs < 1000 ? node.timing.durationMs + "ms" : (node.timing.durationMs / 1000).toFixed(1) + "s"})` : ""}`}
       >
         <span className={node.pruned ? "line-through" : ""}>
           {node.role === "system"
