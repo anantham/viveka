@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { ConversationTree, getActivePath, getSiblings } from "@/lib/tree";
 import { Session, ContextBlock, estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
 import ChatBubbleView from "./ChatBubbleView";
+import ReaderView from "./ReaderView";
 import TreeMapView from "./TreeMapView";
 import CanvasView from "./CanvasView";
 import PatternOverlay from "../PatternOverlay";
@@ -503,11 +504,29 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </div>
         )}
 
-        {/* Chat bubble view */}
-        {(view === "chat" || view === "split") && (
-          <div
-            className={`${view === "split" ? "w-1/2 border-r border-stone-800" : "w-full"} overflow-y-auto`}
-          >
+        {/* Reader view (chat mode = full reading surface) */}
+        {view === "chat" && (
+          <div className="w-full overflow-y-auto">
+            <ReaderView
+              nodes={activePath}
+              onEdit={handleEdit}
+              onNodeClick={handleNodeSelect}
+              siblingCounts={siblingCounts}
+              onNavigateSibling={async (nodeId, direction) => {
+                const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);
+                const idx = sibs.findIndex((n) => n.id === nodeId);
+                const nextIdx = direction === "next"
+                  ? (idx + 1) % sibs.length
+                  : (idx - 1 + sibs.length) % sibs.length;
+                if (sibs[nextIdx]) await handleNodeSelect(sibs[nextIdx].id);
+              }}
+            />
+          </div>
+        )}
+
+        {/* Chat bubble view (split mode = compact bubbles on left half) */}
+        {view === "split" && (
+          <div className="w-1/2 border-r border-stone-800 overflow-y-auto">
             <ChatBubbleView
               nodes={activePath}
               onNodeClick={handleNodeSelect}
