@@ -141,10 +141,71 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
     }
   };
 
-  // Transition to LOOM when ready to expand
+  // Transition to LOOM when ready
   const handleExpandToLoom = () => {
     window.location.href = `/loom/${tree.id}`;
   };
+
+  // Expand mode — AI widens the thought-space
+  const [expanding, setExpanding] = useState(false);
+  const [expansions, setExpansions] = useState<Array<{ id: string; content: string; mode: string }>>([]);
+  const expandPollRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleExpand = useCallback(
+    async (mode: "threads" | "tensions" | "metaphors" | "full") => {
+      // Save current text first if there's unsaved content
+      if (text.trim()) {
+        await saveBlock(text);
+      }
+
+      setExpanding(true);
+      try {
+        const res = await fetch("/api/expand", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ treeId: tree.id, mode }),
+        });
+        const data = await res.json();
+        if (data.nodeId) {
+          // Poll for completion
+          expandPollRef.current = setInterval(async () => {
+            const treeRes = await fetch("/api/tree/get", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: tree.id }),
+            });
+            const freshTree = await treeRes.json();
+            if (!freshTree.error) {
+              setTree(freshTree);
+              const node = freshTree.nodes[data.nodeId];
+              if (node && node.status === "complete") {
+                if (expandPollRef.current) clearInterval(expandPollRef.current);
+                setExpanding(false);
+                setExpansions((prev) => [
+                  ...prev,
+                  { id: node.id, content: node.content, mode },
+                ]);
+              } else if (node && node.status === "error") {
+                if (expandPollRef.current) clearInterval(expandPollRef.current);
+                setExpanding(false);
+              }
+            }
+          }, 1500);
+        }
+      } catch (err) {
+        console.error("Expand failed:", err);
+        setExpanding(false);
+      }
+    },
+    [tree.id, text, saveBlock]
+  );
+
+  // Cleanup poll on unmount
+  useEffect(() => {
+    return () => {
+      if (expandPollRef.current) clearInterval(expandPollRef.current);
+    };
+  }, []);
 
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const totalWords = blocks.reduce(
@@ -177,12 +238,26 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
             ambient
           </button>
           {blocks.length > 0 && (
-            <button
-              onClick={handleExpandToLoom}
-              className="text-xs px-2 py-0.5 rounded border border-emerald-800 text-emerald-500 hover:text-emerald-400 hover:border-emerald-700 transition-colors"
-            >
-              → expand in LOOM
-            </button>
+            <>
+              <div className="flex gap-1">
+                {(["threads", "tensions", "metaphors", "full"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => handleExpand(m)}
+                    disabled={expanding}
+                    className="text-xs px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 disabled:opacity-30 transition-colors"
+                  >
+                    {m === "full" ? "✦ expand" : m}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={handleExpandToLoom}
+                className="text-xs px-2 py-0.5 rounded border border-emerald-800 text-emerald-500 hover:text-emerald-400 hover:border-emerald-700 transition-colors"
+              >
+                → LOOM
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -251,6 +326,30 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
           className="w-full h-full min-h-[300px] bg-transparent text-stone-200 text-base leading-relaxed placeholder:text-stone-700 focus:outline-none resize-none"
         />
       </div>
+
+      {/* Expansions — AI-generated widening of the thought-space */}
+      {(expansions.length > 0 || expanding) && (
+        <div className="border-t border-stone-800/30">
+          {expanding && (
+            <div className="px-6 py-4 text-sm text-stone-600 animate-pulse">
+              Expanding...
+            </div>
+          )}
+          {expansions.map((exp) => (
+            <div
+              key={exp.id}
+              className="px-6 py-4 border-b border-stone-800/20"
+            >
+              <div className="text-[10px] text-stone-600 uppercase tracking-wider mb-2">
+                {exp.mode === "full" ? "expansion" : exp.mode}
+              </div>
+              <div className="text-sm text-stone-400 leading-relaxed whitespace-pre-wrap">
+                {exp.content}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Vault references — auto-detected from your writing */}
       <RetrievePanel
