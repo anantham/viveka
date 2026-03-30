@@ -3,6 +3,7 @@
 import { useRef, useState, useCallback } from "react";
 import { TreeNode } from "@/lib/tree";
 import { CursorTool } from "@/lib/canvas-utils";
+import VersionHistory from "./VersionHistory";
 
 interface CanvasNodeProps {
   node: TreeNode;
@@ -20,6 +21,7 @@ interface CanvasNodeProps {
   onEdit?: (nodeId: string, content: string) => void;
   onRerollComplete?: () => void;
   onTangentSplit?: (nodeId: string, charPosition: number) => void;
+  onVersionRevert?: (nodeId: string, content: string) => void;
 }
 
 export default function CanvasNode({
@@ -38,6 +40,7 @@ export default function CanvasNode({
   onEdit,
   onRerollComplete,
   onTangentSplit,
+  onVersionRevert,
 }: CanvasNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const isDraggingNode = useRef(false);
@@ -46,6 +49,7 @@ export default function CanvasNode({
   const [editText, setEditText] = useState(node.content);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isRerolling, setIsRerolling] = useState(false);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
   const rerollDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Measure height after render
@@ -389,7 +393,33 @@ export default function CanvasNode({
         >
           {isUser ? "human" : "assistant"}
           {node.version > 1 && (
-            <span className="ml-2 text-stone-600">v{node.version}</span>
+            <span className="relative ml-2 inline-block">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setShowVersionHistory((v) => !v);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="text-stone-500 hover:text-amber-400 hover:bg-stone-700/50 px-1 rounded transition-colors cursor-pointer font-mono"
+                title={`Version ${node.version} — click for history`}
+              >
+                v{node.version}
+              </button>
+              {showVersionHistory && (
+                <VersionHistory
+                  node={node}
+                  onRevert={(nodeId, content) => {
+                    if (onVersionRevert) {
+                      onVersionRevert(nodeId, content);
+                    } else if (onEdit) {
+                      onEdit(nodeId, content);
+                    }
+                  }}
+                  onClose={() => setShowVersionHistory(false)}
+                />
+              )}
+            </span>
           )}
           {isRerolling && (
             <span className="ml-2 text-amber-500 animate-pulse">rerolling...</span>

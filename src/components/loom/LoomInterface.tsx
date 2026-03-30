@@ -2,15 +2,28 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ConversationTree, getActivePath, getSiblings } from "@/lib/tree";
+import { Session, ContextBlock, estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
 import ChatBubbleView from "./ChatBubbleView";
 import TreeMapView from "./TreeMapView";
 import CanvasView from "./CanvasView";
+import PatternOverlay from "../PatternOverlay";
+import UsageMeters from "../UsageMeters";
+import ContextPanel from "../ContextPanel";
 
 interface LoomInterfaceProps {
   initialTree: ConversationTree;
 }
 
 type View = "chat" | "tree" | "split" | "canvas";
+
+/** An entry in the node-level undo stack. Stores the content before a mutation. */
+interface UndoEntry {
+  nodeId: string;
+  previousContent: string;
+  timestamp: number;
+}
+
+const MAX_UNDO_STACK = 50;
 
 export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [tree, setTree] = useState(initialTree);
@@ -20,6 +33,13 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [polling, setPolling] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [virtualSession, setVirtualSession] = useState<Session | null>(null);
+  const [showContextPanel, setShowContextPanel] = useState(false);
+  const [contextBlocks, setContextBlocks] = useState<ContextBlock[]>([]);
+  const [exporting, setExporting] = useState(false);
+  const [exportResult, setExportResult] = useState<{ path?: string; error?: string } | null>(null);
+  const prevHasGenerating = useRef(false);
+  const undoStackRef = useRef<UndoEntry[]>([]);
 
   // Poll for generating nodes
   const hasGenerating = Object.values(tree.nodes).some(
@@ -76,6 +96,91 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     const data = await res.json();
     if (!data.error) setTree(data);
   }, [tree.id]);
+
+  // --- Session-based features bridge ---
+
+  const fetchVirtualSession = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tree/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ treeId: tree.id }),
+      });
+      const data = await res.json();
+      if (!data.error) setVirtualSession(data);
+    } catch {
+      // session overlay is non-critical
+    }
+  }, [tree.id]);
+
+  // When generation completes, refresh the virtual session
+  useEffect(() => {
+    if (prevHasGenerating.current && !hasGenerating) {
+      fetchVirtualSession();
+    }
+    prevHasGenerating.current = hasGenerating;
+  }, [hasGenerating, fetchVirtualSession]);
+
+  // Fetch virtual session on mount / tree change
+  useEffect(() => {
+    fetchVirtualSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree.id]);
+
+  const handleExportToObsidian = async () => {
+    setExporting(true);
+    setExportResult(null);
+    try {
+      const res = await fetch("/api/tree/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ treeId: tree.id }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setExportResult({ error: data.error });
+      } else {
+        setExportResult({ path: data.obsidianPath });
+      }
+    } catch {
+      setExportResult({ error: "Network error during export" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Compute context usage for usage meters
+  const contextUsage = virtualSession
+    ? {
+        contextBlockTokens: contextBlocks
+          .filter((b) => b.enabled)
+          .reduce((sum, b) => sum + b.tokenEstimate, 0),
+        historyTokens: virtualSession.exchanges.reduce(
+          (sum, ex) =>
+            sum +
+            estimateTokens(ex.userMessage) +
+            estimateTokens(ex.systemResponse),
+          0
+        ),
+        totalTokens:
+          virtualSession.exchanges.reduce(
+            (sum, ex) =>
+              sum +
+              estimateTokens(ex.userMessage) +
+              estimateTokens(ex.systemResponse),
+            0
+          ) +
+          contextBlocks
+            .filter((b) => b.enabled)
+            .reduce((sum, b) => sum + b.tokenEstimate, 0),
+        maxTokens: MAX_CONTEXT_TOKENS,
+      }
+    : null;
+
+  // Find the last exchange with an active intervention warning
+  const lastIntervention = virtualSession?.exchanges
+    .filter((ex) => ex.interventionShown)
+    .pop();
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -156,7 +261,20 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     await refreshTree();
   };
 
+  const pushUndo = useCallback((nodeId: string, previousContent: string) => {
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(MAX_UNDO_STACK - 1)),
+      { nodeId, previousContent, timestamp: Date.now() },
+    ];
+  }, []);
+
   const handleEdit = async (nodeId: string, content: string) => {
+    // Save current content to undo stack before editing
+    const currentNode = tree.nodes[nodeId];
+    if (currentNode && currentNode.content !== content) {
+      pushUndo(nodeId, currentNode.content);
+    }
+
     await fetch("/api/tree/edit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -165,6 +283,22 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     setEditingId(null);
     await refreshTree();
   };
+
+  const handleUndo = useCallback(async () => {
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+
+    await fetch("/api/tree/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        treeId: tree.id,
+        nodeId: entry.nodeId,
+        content: entry.previousContent,
+      }),
+    });
+    await refreshTree();
+  }, [tree.id, refreshTree]);
 
   const handlePrune = async (nodeId: string) => {
     await fetch("/api/tree/prune", {
@@ -191,10 +325,25 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     }
   };
 
-  // Cmd+1/2/3/4 to switch views
+  // Cmd+1/2/3/4 to switch views, Cmd+Z to undo
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if (!e.metaKey && !e.ctrlKey) return;
+
+      // Cmd+Z — undo last node mutation
+      if (e.key === "z" && !e.shiftKey) {
+        // Don't intercept if user is typing in an input/textarea
+        if (
+          e.target instanceof HTMLTextAreaElement ||
+          e.target instanceof HTMLInputElement
+        ) {
+          return;
+        }
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
       const viewMap: Record<string, View> = { "1": "chat", "2": "split", "3": "tree", "4": "canvas" };
       if (viewMap[e.key]) {
         e.preventDefault();
@@ -203,7 +352,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, []);
+  }, [handleUndo]);
 
   // Navigate siblings with arrow keys
   const handleNavigateSibling = async (direction: "prev" | "next") => {
@@ -238,6 +387,26 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <UsageMeters rateLimit={null} contextUsage={contextUsage} />
+          <button
+            onClick={() => setShowContextPanel((v) => !v)}
+            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+              showContextPanel
+                ? "border-stone-500 text-stone-300"
+                : "border-stone-700 text-stone-600 hover:text-stone-400"
+            }`}
+            title="Toggle context panel"
+          >
+            ctx
+          </button>
+          <button
+            onClick={handleExportToObsidian}
+            disabled={exporting}
+            className="text-xs px-2 py-0.5 rounded border border-stone-700 text-stone-600 hover:text-stone-400 disabled:opacity-30 transition-colors"
+            title="Export to Obsidian"
+          >
+            {exporting ? "exporting..." : "export"}
+          </button>
           {(["chat", "split", "tree", "canvas"] as const).map((v) => (
             <button
               key={v}
@@ -254,10 +423,59 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
         </div>
       </header>
 
+      {/* Export result toast */}
+      {exportResult && (
+        <div
+          className={`px-4 py-2 text-xs border-b ${
+            exportResult.error
+              ? "border-red-800 bg-red-950/30 text-red-400"
+              : "border-emerald-800 bg-emerald-950/30 text-emerald-400"
+          }`}
+        >
+          {exportResult.error
+            ? `Export failed: ${exportResult.error}`
+            : `Exported to ${exportResult.path}`}
+          <button
+            onClick={() => setExportResult(null)}
+            className="ml-2 text-stone-600 hover:text-stone-400"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       {/* Intent */}
       <div className="px-4 py-2 border-b border-stone-800/50 text-xs text-stone-600">
         {tree.intent}
       </div>
+
+      {/* Context panel (toggled) */}
+      {showContextPanel && (
+        <ContextPanel
+          sessionId={tree.id}
+          blocks={contextBlocks}
+          onBlocksChange={setContextBlocks}
+        />
+      )}
+
+      {/* Intervention warning banner */}
+      {lastIntervention?.interventionShown && (
+        <div
+          className={`px-4 py-2 text-xs border-b ${
+            lastIntervention.interventionShown.type === "stop" ||
+            lastIntervention.interventionShown.type === "pause"
+              ? "border-red-800 bg-red-950/30 text-red-300"
+              : lastIntervention.interventionShown.type === "warning"
+                ? "border-amber-800 bg-amber-950/30 text-amber-300"
+                : "border-blue-800 bg-blue-950/30 text-blue-300"
+          }`}
+        >
+          <span className="font-medium uppercase mr-2">
+            {lastIntervention.interventionShown.type}:
+          </span>
+          {lastIntervention.interventionShown.message}
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
@@ -321,6 +539,26 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
                 >
                   next →
                 </button>
+              </div>
+            )}
+
+            {/* Pattern detection overlays for the last exchange */}
+            {virtualSession && virtualSession.exchanges.length > 0 && (
+              <div className="px-4 pb-2">
+                <PatternOverlay
+                  heuristics={
+                    virtualSession.exchanges[virtualSession.exchanges.length - 1]
+                      .heuristicFlags
+                  }
+                  classifier={
+                    virtualSession.exchanges[virtualSession.exchanges.length - 1]
+                      .classifierFlags
+                  }
+                  intervention={
+                    virtualSession.exchanges[virtualSession.exchanges.length - 1]
+                      .interventionShown
+                  }
+                />
               </div>
             )}
           </div>

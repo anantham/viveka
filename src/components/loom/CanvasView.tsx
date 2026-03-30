@@ -548,6 +548,7 @@ export default function CanvasView({
               onEdit={onNodeEdit}
               onRerollComplete={onRefreshTree}
               onTangentSplit={handleTangentSplit}
+              onVersionRevert={onNodeEdit}
             />
           );
         })}
