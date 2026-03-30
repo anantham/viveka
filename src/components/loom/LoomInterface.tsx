@@ -191,6 +191,20 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     }
   };
 
+  // Cmd+1/2/3/4 to switch views
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      const viewMap: Record<string, View> = { "1": "chat", "2": "split", "3": "tree", "4": "canvas" };
+      if (viewMap[e.key]) {
+        e.preventDefault();
+        setView(viewMap[e.key]);
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+
   // Navigate siblings with arrow keys
   const handleNavigateSibling = async (direction: "prev" | "next") => {
     if (!lastNode || !lastNode.parentId) return;

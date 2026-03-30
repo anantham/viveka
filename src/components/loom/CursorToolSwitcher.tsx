@@ -34,11 +34,6 @@ export default function CursorToolSwitcher({
           <span className="hidden sm:inline">{tool.label}</span>
         </button>
       ))}
-
-      {/* Scroll hint */}
-      <div className="px-2 text-[9px] text-stone-600 border-l border-stone-700">
-        scroll to cycle
-      </div>
     </div>
   );
 }

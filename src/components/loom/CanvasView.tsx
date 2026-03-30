@@ -11,7 +11,6 @@ import {
   computeGhostPosition,
   computePathPoints,
   isInContext,
-  cycleTool,
 } from "@/lib/canvas-utils";
 import { usePanZoom } from "@/hooks/usePanZoom";
 import { useFlipTransition } from "@/hooks/useFlipTransition";
@@ -244,21 +243,7 @@ export default function CanvasView({
     animateFlip,
   ]);
 
-  // Cursor tool cycling via scroll
-  const handleToolScroll = useCallback(
-    (e: React.WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) return;
-
-      const selection = window.getSelection();
-      if (selection && !selection.isCollapsed && selection.toString().trim().length >= 2) {
-        return;
-      }
-
-      const direction = e.deltaY > 0 ? 1 : -1;
-      setCursorTool((prev) => cycleTool(prev, direction as 1 | -1));
-    },
-    []
-  );
+  // Scroll-to-cycle removed — use keyboard shortcuts (1/2/3) instead
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -343,7 +328,6 @@ export default function CanvasView({
     <div
       ref={viewportRef}
       className={`relative w-full h-full overflow-hidden bg-stone-950 ${cursorClass}`}
-      onWheel={handleToolScroll}
     >
       {/* Toolbar — viewport space */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3">
