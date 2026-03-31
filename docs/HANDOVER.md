@@ -1,4 +1,46 @@
-# Handover: 2026-03-30
+# Handover: 2026-03-31
+
+## Session Summary
+Built LLM backend switcher (Ollama, LM Studio over Tailscale, OpenRouter) with UI settings panel — gear icon in all interfaces, runtime config persisted to `.viveka-data/llm-config.json`. Then captured the full compression pipeline vision (modes A-G, audience archetypes), mapped the founding conversation (`chat context.txt`) and IIT handbook SVG to current state, and produced vision + roadmap docs.
+
+## Commits This Session
+- `44eb602` feat: LLM backend switcher with UI settings panel
+- `3530c9f` docs: vision and roadmap with IIT integration and chat context mapping
+
+PUSHED: No (2 commits ahead of origin)
+
+## Pending Threads
+
+### Continue Immediately
+1. **Test LLM backend switcher** — built but not tested e2e. Need Ollama (`ollama serve` + `ollama pull llama3.2:3b`) or LM Studio on Tailscale.
+2. **Phase 0.5: Cross-session intelligence** — data exists in Obsidian exports, needs dashboard. See `docs/roadmap.md`.
+
+### Blocked
+None
+
+### Deferred
+1. **Phase 1-5** — Fidelity Check, Concept Extraction, Style Transfer, Research, Visual Compaction. All designed in `docs/roadmap.md`.
+2. **IIT Facilitator Mode** — open question in roadmap
+
+## Key Context (This Session)
+- **Two-layer framing:** Attentional scaffolding (mechanism) + compression pipeline (purpose). See `docs/vision.md`.
+- **IIT is the parent framework.** `IIT Handbook and Roadmap March 2026.svg` at project root. Extract text with: `python3 -c "import re; [print(t) for t in re.findall(r'>([^<]+)<', open('IIT...svg').read()) if len(t.strip())>1]"`
+- **LLM backend switcher files:** `src/lib/openai-compat.ts` (adapter), `src/lib/llm-config.ts` (config store), `src/components/LLMSettings.tsx` (UI), `src/app/api/llm-config/route.ts` (API). Routing injected at top of `queryClaudeCode`/`streamClaudeCode` in `claude.ts`.
+- **Memory updated:** `project_architecture.md` and new `project_vision_pipeline.md` in auto-memory.
+
+## Resume Instructions
+1. Push if ready: `git push`
+2. Test LLM backend switcher with a local model
+3. Read `docs/roadmap.md` — Phase 0.5 (cross-session intelligence) is next build target
+4. Vision has open questions (Mode G, List 1, Feature 8) — discuss before building
+
+---
+*Handover by Claude Opus 4.6 at ~60% context*
+
+---
+---
+
+# Previous Handover: 2026-03-30
 
 ## Session Summary
 Built Viveka v0.1 from ADR to working product in one session. Started from a chat context document about Buddhist philosophy and the problem of chat interfaces training craving loops. Built: linear chat with pattern detection, LOOM tree conversations with canvas workbench, freeform dump mode with vault retrieval and AI expansion, incubate timer, reader view. 22 commits, ~7,000 lines of code, deployed to https://github.com/anantham/viveka.
