@@ -1,7 +1,58 @@
-# Handover: 2026-03-31
+# Handover: 2026-03-31 (Session 2)
 
 ## Session Summary
-Built LLM backend switcher (Ollama, LM Studio over Tailscale, OpenRouter) with UI settings panel — gear icon in all interfaces, runtime config persisted to `.viveka-data/llm-config.json`. Then captured the full compression pipeline vision (modes A-G, audience archetypes), mapped the founding conversation (`chat context.txt`) and IIT handbook SVG to current state, and produced vision + roadmap docs.
+Major data model rework: evolved TreeNode into fragment-based workspace model. Text fragments are now the primitive with provenance tracking, workspace/stage zones, operation logging, and full OpenRouter parameter support. Backend is complete (data model + 3 new API routes). UI not yet wired — that's the next step.
+
+Also this session: captured compression pipeline vision, mapped chat context + IIT handbook to codebase, built LLM backend switcher, wrote ADR-002.
+
+## Commits This Session
+- `44eb602` feat: LLM backend switcher with UI settings panel
+- `3530c9f` docs: vision and roadmap with IIT integration and chat context mapping
+- `a63ac9b` docs: handover for 2026-03-31 session
+- `65b4c45` docs: ADR-001 moved to repo, ADR-002 workspace data model requirements
+- `76bffcb` feat: fragment data model + split/move/zone APIs
+
+PUSHED: No (5 commits ahead of origin)
+
+## Pending Threads
+
+### Continue Immediately
+1. **Wire fragment operations into UI** — the backend is done but no UI uses it yet. Key tasks:
+   - Reader view: text selection → split-range API call → re-render fragments
+   - Canvas view: drag fragments to reorder → move API call
+   - Stage panel: show staged fragments, drag workspace↔stage → zone API call
+   - Cursor mode switcher: Select / Hand / Type / Pull modes
+   - Provenance color coding on fragments
+2. **Test with local model** — LLM backend switcher not tested e2e yet
+
+### Blocked
+None
+
+### Deferred
+1. **OpenRouter adapter upgrade** (Step 4) — full parameter support from LexiconForge pattern. Backend types ready (`GenerationParams`), adapter not yet updated.
+2. **Phases 1-5** from roadmap
+
+## Key Context (This Session)
+- **Data model in `src/lib/tree.ts`** — TreeNode extended with optional `provenance`, `zone`, `sequenceIndex`. ConversationTree extended with `sequence[]` and `opLog[]`. All backward-compatible.
+- **New types:** `Provenance`, `GenerationParams`, `Operation` (union), `FragmentZone`
+- **New operations:** `splitFragmentAtRange()`, `moveFragment()`, `transferZone()`, `getSequence()`, `getFragmentsByZone()`, `getWorkspaceContext()`
+- **New API routes:** `/api/tree/split-range`, `/api/tree/move`, `/api/tree/zone`
+- **ADR-002** in `docs/ADR-002-workspace-data-model.md` — full feature requirements (40+ items across 8 groups)
+- **LexiconForge adapter** at `/Users/aditya/Documents/Ongoing Local/LexiconForge/adapters/providers/OpenAIAdapter.ts` — reference implementation for OpenRouter parameter validation, capability detection, graceful fallback
+- **Key design decisions from brainstorming:**
+  - Split at selection edge → 2 fragments; split in middle → 3
+  - AI generation sees entire workspace (not chat history)
+  - Multi-model fan-out: N models see same workspace snapshot
+  - Workspace vs Stage zones: stage = visible to human, not AI context
+  - Operation log is append-only for reproducibility
+  - Provenance tracks model identity, not just "human vs AI"
+
+## Resume Instructions
+1. Read `src/lib/tree.ts` — the new operations at the bottom
+2. The UI needs: selection → split, drag → reorder, stage panel, cursor modes
+3. Start with ReaderView — it's the simplest view and the natural place for text selection → split
+4. Then CanvasView — add drag-to-reorder using the existing pointer drag code
+5. Color coding can come last — it's visual polish, not functionality
 
 ## Commits This Session
 - `44eb602` feat: LLM backend switcher with UI settings panel
