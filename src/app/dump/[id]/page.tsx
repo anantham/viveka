@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ConversationTree } from "@/lib/tree";
+import type { Workspace } from "@/lib/workspace";
 import DumpInterface from "@/components/DumpInterface";
 
 export default function DumpPage() {
   const params = useParams();
   const treeId = params.id as string;
-  const [tree, setTree] = useState<ConversationTree | null>(null);
+  const [tree, setTree] = useState<Workspace | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ConversationTree, getActivePath } from "@/lib/tree";
+import type { Workspace, Fragment } from "@/lib/workspace";
 import RetrievePanel from "./RetrievePanel";
 
 interface DumpInterfaceProps {
-  initialTree: ConversationTree;
+  initialTree: Workspace;
 }
 
 interface AmbientState {
@@ -17,6 +17,7 @@ interface AmbientState {
 
 export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
   const [tree, setTree] = useState(initialTree);
+  // Workspace-compatible: sequence replaces getActivePath
   const [text, setText] = useState("");
   const [showAmbient, setShowAmbient] = useState(false);
   const [ambient, setAmbient] = useState<AmbientState>({
@@ -32,12 +33,12 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autoSaveRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Load existing blocks from tree
+  // Load existing blocks from workspace sequence
   useEffect(() => {
-    const path = getActivePath(tree);
-    const existingBlocks = path
-      .filter((n) => n.role === "user" && n.content)
-      .map((n) => ({ id: n.id, content: n.content, timestamp: n.createdAt }));
+    const existingBlocks = tree.sequence
+      .map((id) => tree.fragments[id])
+      .filter((f): f is Fragment => !!f && f.provenance.type === "human-typed" && !!f.content)
+      .map((f) => ({ id: f.id, content: f.content, timestamp: f.createdAt }));
     setBlocks(existingBlocks);
   }, [tree]);
 
