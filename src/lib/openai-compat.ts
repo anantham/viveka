@@ -4,6 +4,7 @@
  */
 import type { ClaudeResponse, UsageInfo } from "./claude";
 import { loadLLMConfig } from "./llm-config";
+import { getPromptFormat, supportsParameters } from "./model-capabilities";
 
 function log(stage: string, detail: string, ms?: number) {
   const ts = new Date().toISOString().slice(11, 23);
@@ -66,6 +67,28 @@ export function getOpenAICompatConfig(): OpenAICompatConfig | null {
  * Non-streaming query to an OpenAI-compatible endpoint.
  * Returns the same ClaudeResponse shape so callers don't need to change.
  */
+/**
+ * Format workspace context as raw text for base models.
+ * Base models don't understand system/user/assistant roles —
+ * they just predict the next token from a document.
+ */
+function formatAsRawText(
+  prompt: string,
+  systemPrompt: string,
+  conversationHistory: Array<{ role: "user" | "assistant"; content: string }>
+): string {
+  const parts: string[] = [];
+  if (systemPrompt) {
+    parts.push(`[Context]\n${systemPrompt}\n`);
+  }
+  for (const msg of conversationHistory) {
+    const label = msg.role === "user" ? "Human" : "Response";
+    parts.push(`[${label}]\n${msg.content}\n`);
+  }
+  parts.push(`[Human]\n${prompt}\n\n[Response]\n`);
+  return parts.join("\n");
+}
+
 export async function queryOpenAICompat(
   prompt: string,
   systemPrompt: string,
@@ -73,28 +96,56 @@ export async function queryOpenAICompat(
   config: OpenAICompatConfig
 ): Promise<ClaudeResponse> {
   const t0 = Date.now();
-  const messages = [
-    { role: "system" as const, content: systemPrompt },
-    ...conversationHistory,
-    { role: "user" as const, content: prompt },
-  ];
 
-  const msgCount = messages.length;
-  const promptChars = messages.reduce((s, m) => s + m.content.length, 0);
-  log("request", `${config.model} via ${config.baseUrl} | ${msgCount} msgs, ~${promptChars} chars`);
+  // Check if this is a base model
+  const promptFormat = await getPromptFormat(config.model);
+  const isBase = promptFormat === "raw-text";
+
+  let requestBody: Record<string, unknown>;
+
+  if (isBase) {
+    // Base model: single raw text prompt, no message roles
+    const rawPrompt = formatAsRawText(prompt, systemPrompt, conversationHistory);
+    log("request", `${config.model} [BASE] via ${config.baseUrl} | ~${rawPrompt.length} chars raw`);
+    requestBody = {
+      model: config.model,
+      prompt: rawPrompt,
+      stream: false,
+      max_tokens: 2048,
+    };
+  } else {
+    // Instruct model: standard chat messages
+    const messages = [
+      { role: "system" as const, content: systemPrompt },
+      ...conversationHistory,
+      { role: "user" as const, content: prompt },
+    ];
+    const msgCount = messages.length;
+    const promptChars = messages.reduce((s, m) => s + m.content.length, 0);
+    log("request", `${config.model} [INSTRUCT] via ${config.baseUrl} | ${msgCount} msgs, ~${promptChars} chars`);
+    requestBody = {
+      model: config.model,
+      messages,
+      stream: false,
+    };
+  }
+
+  // Add supported parameters only
+  const paramsToCheck = ["temperature", "top_p", "frequency_penalty", "presence_penalty", "seed"];
+  const supported = await supportsParameters(config.model, paramsToCheck);
+  if (!supported) {
+    log("params", `model may not support all params — sending without advanced params`);
+  }
 
   const t1 = Date.now();
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
+  const endpoint = isBase ? `${config.baseUrl}/completions` : `${config.baseUrl}/chat/completions`;
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      stream: false,
-    }),
+    body: JSON.stringify(requestBody),
   });
   const t2 = Date.now();
   log("fetch", `HTTP ${response.status}`, t2 - t1);
@@ -109,7 +160,10 @@ export async function queryOpenAICompat(
 
   const data = await response.json();
   const t3 = Date.now();
-  const text = data.choices?.[0]?.message?.content?.trim() || "";
+  // Base models return choices[0].text, instruct models return choices[0].message.content
+  const text = isBase
+    ? (data.choices?.[0]?.text?.trim() || "")
+    : (data.choices?.[0]?.message?.content?.trim() || "");
 
   const usage: UsageInfo | null = data.usage
     ? {
