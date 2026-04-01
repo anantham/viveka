@@ -9,6 +9,7 @@ import ChatBubbleView from "./ChatBubbleView";
 import ReaderView from "./ReaderView";
 import TreeMapView from "./TreeMapView";
 import CanvasView from "./CanvasView";
+import WorkspaceCanvas from "./WorkspaceCanvas";
 import PatternOverlay from "../PatternOverlay";
 import UsageMeters from "../UsageMeters";
 import ContextPanel from "../ContextPanel";
@@ -633,26 +634,27 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Canvas view */}
+        {/* Canvas view — workspace-native */}
         {view === "canvas" && (
           <div className="w-full h-full">
-            <CanvasView
-              tree={tree}
-              onGenerate={() => {
-                if (lastNode) {
-                  if (lastNode.role === "assistant" || lastNode.role === "system") {
-                    // Need user input first — focus the input
-                    inputRef.current?.focus();
-                  } else {
-                    handleReroll();
-                  }
-                }
-              }}
-              onSubmitMessage={sendUserMessage}
-              onNodeSelect={handleNodeSelect}
-              onNodeEdit={handleEdit}
-              onRefreshTree={refreshTree}
+            <WorkspaceCanvas
+              workspace={ws}
               onSplitRange={handleSplitRange}
+              onMoveFragment={handleMoveFragment}
+              onZoneTransfer={handleZoneTransfer}
+              onEdit={handleEdit}
+              onGenerate={handleReroll}
+              onSubmitMessage={sendUserMessage}
+              onSelectFragment={async (fragId) => {
+                // Add unplaced fragment to sequence
+                await fetch("/api/tree/zone", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ treeId: ws.id, fragmentId: fragId, toZone: "workspace" }),
+                });
+                await refreshTree();
+              }}
+              onRefresh={refreshTree}
               isGenerating={hasGenerating}
             />
           </div>

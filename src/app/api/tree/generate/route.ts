@@ -101,8 +101,9 @@ export async function POST(req: NextRequest) {
             completedAt: new Date().toISOString(),
             durationMs,
           };
-          // Add first completion to sequence automatically
-          if (i === 0) {
+          // Add first successful completion to sequence
+          const anyInSeq = pendingFragments.some((pid) => freshWs.sequence.includes(pid));
+          if (!anyInSeq) {
             appendToSequence(freshWs, fragId);
           }
           saveWorkspace(freshWs);
