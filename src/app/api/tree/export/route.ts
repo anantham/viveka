@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree } from "@/lib/tree-store";
-import { treeToSession } from "@/lib/tree-session-adapter";
+import { getWorkspace } from "@/lib/workspace-store";
+import { workspaceToSession } from "@/lib/workspace-session-adapter";
 import { writeSessionToObsidian } from "@/lib/obsidian";
 
 /**
@@ -18,15 +18,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const tree = getTree(treeId);
-  if (!tree) {
+  const ws = getWorkspace(treeId);
+  if (!ws) {
     return NextResponse.json(
       { error: "Tree not found" },
       { status: 404 }
     );
   }
 
-  const session = treeToSession(tree);
+  const session = workspaceToSession(ws);
 
   try {
     const obsidianPath = await writeSessionToObsidian(session);

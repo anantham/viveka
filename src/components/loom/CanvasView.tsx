@@ -28,6 +28,7 @@ interface CanvasViewProps {
   onNodeSelect: (nodeId: string) => void;
   onNodeEdit: (nodeId: string, content: string) => void;
   onRefreshTree?: () => void;
+  onSplitRange?: (nodeId: string, charStart: number, charEnd: number) => void;
   isGenerating: boolean;
 }
 
@@ -44,6 +45,7 @@ export default function CanvasView({
   onNodeSelect,
   onNodeEdit,
   onRefreshTree,
+  onSplitRange,
   isGenerating,
 }: CanvasViewProps) {
   const activePath = getActivePath(tree);
@@ -549,6 +551,10 @@ export default function CanvasView({
               onRerollComplete={onRefreshTree}
               onTangentSplit={handleTangentSplit}
               onVersionRevert={onNodeEdit}
+              onSplitRange={(nodeId, charStart, charEnd) => {
+                onSplitRange?.(nodeId, charStart, charEnd);
+                onRefreshTree?.();
+              }}
             />
           );
         })}

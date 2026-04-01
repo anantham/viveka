@@ -1,45 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree, saveTree } from "@/lib/tree-store";
-import { splitNodeAtPosition } from "@/lib/tree";
+import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
+import { splitFragment } from "@/lib/workspace";
 
 /**
- * Split a node's content mid-text (tangent/star mode).
- * Truncates the node at charPosition (snapped to word boundary), appends "...",
- * and creates a new empty child node for the user's interruption.
+ * Split a fragment mid-text (tangent/star mode).
+ * Uses the range split with charStart = charPosition, charEnd = content.length.
  */
 export async function POST(req: NextRequest) {
   const { treeId, nodeId, charPosition } = await req.json();
 
   if (!treeId || !nodeId || charPosition === undefined) {
-    return NextResponse.json(
-      { error: "treeId, nodeId, and charPosition are required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "treeId, nodeId, and charPosition are required" }, { status: 400 });
   }
 
-  const tree = getTree(treeId);
-  if (!tree) {
-    return NextResponse.json({ error: "Tree not found" }, { status: 404 });
+  const ws = getWorkspace(treeId);
+  if (!ws) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
+
+  const frag = ws.fragments[nodeId];
+  if (!frag) return NextResponse.json({ error: "Fragment not found" }, { status: 404 });
+
+  // Tangent split = split at position to end (produces 2 fragments: before + after)
+  const results = splitFragment(ws, nodeId, charPosition, frag.content.length);
+
+  if (!results) {
+    return NextResponse.json({ error: "Cannot split at this position (too close to start/end or empty)" }, { status: 400 });
   }
 
-  if (!tree.nodes[nodeId]) {
-    return NextResponse.json({ error: "Node not found" }, { status: 404 });
-  }
-
-  const result = splitNodeAtPosition(tree, nodeId, charPosition);
-
-  if (!result) {
-    return NextResponse.json(
-      { error: "Cannot split at this position (too close to start/end or node is empty)" },
-      { status: 400 }
-    );
-  }
-
-  saveTree(tree);
+  saveWorkspace(ws);
 
   return NextResponse.json({
-    parentNode: result.parentNode,
-    childNode: result.childNode,
-    activePathIds: tree.activePathIds,
+    fragments: results,
+    sequence: ws.sequence,
   });
 }

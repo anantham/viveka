@@ -19,7 +19,7 @@ export interface GenerationParams {
 }
 
 export interface Provenance {
-  type: "human-typed" | "ai-generated" | "split" | "extracted" | "imported" | "merged";
+  type: "human-typed" | "ai-generated" | "split" | "extracted" | "imported" | "merged" | "derived" | "system";
   model?: string;            // e.g. "claude-sonnet-4-6", "meta-llama/llama-3.1-8b-instruct"
   prompt?: string;           // what was sent to generate this
   params?: GenerationParams; // sampling parameters used

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree, saveTree } from "@/lib/tree-store";
-import { duplicateNodeWithEdit } from "@/lib/tree";
+import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
+import { addFragment, addEdge, getParent } from "@/lib/workspace";
 import { queryClaudeCode } from "@/lib/claude";
 
 /**
@@ -29,19 +29,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const tree = getTree(treeId);
-  if (!tree) {
+  const ws = getWorkspace(treeId);
+  if (!ws) {
     return NextResponse.json({ error: "Tree not found" }, { status: 404 });
   }
 
-  const node = tree.nodes[nodeId];
-  if (!node) {
-    return NextResponse.json({ error: "Node not found" }, { status: 404 });
+  const frag = ws.fragments[nodeId];
+  if (!frag) {
+    return NextResponse.json({ error: "Fragment not found" }, { status: 404 });
   }
 
-  if (!node.parentId) {
+  const parent = getParent(ws, nodeId, "responded-to");
+  if (!parent) {
     return NextResponse.json(
-      { error: "Cannot reroll phrase on root node" },
+      { error: "Cannot reroll phrase on root fragment" },
       { status: 400 }
     );
   }
@@ -86,17 +87,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create sibling nodes for each alternative
+    // Create sibling fragments for each alternative
     const siblingNodeIds: string[] = [];
     for (const altContent of alternatives) {
       if (typeof altContent !== "string") continue;
-      const sibling = duplicateNodeWithEdit(tree, nodeId, altContent);
-      if (sibling) {
-        siblingNodeIds.push(sibling.id);
-      }
+      const sibling = addFragment(ws, altContent, {
+        type: "derived",
+        sourceFragmentIds: [nodeId],
+        model: frag.provenance.model,
+      });
+      addEdge(ws, parent.id, sibling.id, "responded-to");
+      addEdge(ws, nodeId, sibling.id, "derived");
+      siblingNodeIds.push(sibling.id);
     }
 
-    saveTree(tree);
+    saveWorkspace(ws);
 
     console.log(
       `[viveka-loom] reroll-phrase: created ${siblingNodeIds.length} alternatives for node ${nodeId.slice(0, 8)}`

@@ -38,11 +38,15 @@ export async function queryClaudeCode(
   options?: { model?: string; noTools?: boolean }
 ): Promise<ClaudeResponse> {
   // Route to OpenAI-compatible backend if configured
+  const t0 = Date.now();
   const compatConfig = getOpenAICompatConfig();
   if (compatConfig) {
-    return queryOpenAICompat(prompt, systemPrompt, conversationHistory, compatConfig);
+    const result = await queryOpenAICompat(prompt, systemPrompt, conversationHistory, compatConfig);
+    console.log(`[LLM] queryClaudeCode total: ${Date.now() - t0}ms (via ${compatConfig.model})`);
+    return result;
   }
 
+  console.log(`[LLM] queryClaudeCode: using Claude Code CLI subprocess`);
   // Build the full prompt with conversation history
   let fullPrompt = "";
   for (const msg of conversationHistory) {

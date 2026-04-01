@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree, saveTree } from "@/lib/tree-store";
-import { addNode, selectNode, getActivePath } from "@/lib/tree";
+import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
+import { addFragment, addEdge, appendToSequence, updateFragmentContent } from "@/lib/workspace";
 import { queryClaudeCode } from "@/lib/claude";
 
 const EXPAND_SYSTEM_PROMPT = `You are an expansion engine. You do NOT ask questions. You do NOT narrow. You do NOT summarize into a framework.
@@ -26,26 +26,21 @@ export async function POST(req: NextRequest) {
     mode?: "threads" | "tensions" | "metaphors" | "full";
   };
 
-  const tree = getTree(treeId);
-  if (!tree) {
+  const ws = getWorkspace(treeId);
+  if (!ws) {
     return NextResponse.json({ error: "Tree not found" }, { status: 404 });
   }
 
-  // Gather all user text from the active path
-  const path = getActivePath(tree);
-  const userText = path
-    .filter((n) => n.role === "user" && n.content)
-    .map((n) => n.content)
+  // Gather all human-typed text from the sequence
+  const userText = ws.sequence
+    .map((id) => ws.fragments[id])
+    .filter((f) => f && f.provenance.type === "human-typed" && f.content)
+    .map((f) => f.content)
     .join("\n\n---\n\n");
 
   if (!userText.trim()) {
     return NextResponse.json({ error: "No text to expand" }, { status: 400 });
   }
-
-  // Build context from any loaded vault notes
-  let contextSection = "";
-  // Check if tree has context blocks via the session adapter pattern
-  // For now, just use the user text directly
 
   const modePrompt = mode === "threads"
     ? "Focus only on extracting threads — the distinct lines of thought in this writing."
@@ -55,46 +50,43 @@ export async function POST(req: NextRequest) {
         ? "Focus only on proposing fresh metaphors and analogies from unexpected domains."
         : "Do all four: extract threads, surface tensions, propose metaphors, echo back images.";
 
-  const prompt = `${modePrompt}\n\nHere is the writing:\n\n${userText}${contextSection}`;
+  const prompt = `${modePrompt}\n\nHere is the writing:\n\n${userText}`;
 
-  const lastNodeId = tree.activePathIds[tree.activePathIds.length - 1];
+  const lastFragId = ws.sequence[ws.sequence.length - 1];
+  const expansionFrag = addFragment(ws, "", { type: "ai-generated", model: ws.settings.model }, "generating");
+  addEdge(ws, lastFragId, expansionFrag.id, "responded-to");
+  appendToSequence(ws, expansionFrag.id);
+  saveWorkspace(ws);
 
-  // Create a pending assistant node
-  const expansionNode = addNode(tree, lastNodeId, "assistant", "", "ai-completion", "generating");
-  selectNode(tree, expansionNode.id);
-  saveTree(tree);
-
-  const model = tree.settings.model || process.env.VIVEKA_MODEL || "sonnet";
+  const model = ws.settings.model || process.env.VIVEKA_MODEL || "sonnet";
   const startMs = Date.now();
 
-  // Fire async — return immediately
   queryClaudeCode(prompt, EXPAND_SYSTEM_PROMPT, [], { model, noTools: true })
     .then((response) => {
-      const freshTree = getTree(treeId);
-      if (freshTree && freshTree.nodes[expansionNode.id]) {
-        freshTree.nodes[expansionNode.id].content = response.text;
-        freshTree.nodes[expansionNode.id].status = "complete";
-        freshTree.nodes[expansionNode.id].model = model;
-        freshTree.nodes[expansionNode.id].timing = {
+      const freshWs = getWorkspace(treeId);
+      if (freshWs && freshWs.fragments[expansionFrag.id]) {
+        updateFragmentContent(freshWs, expansionFrag.id, response.text);
+        freshWs.fragments[expansionFrag.id].provenance.model = model;
+        freshWs.fragments[expansionFrag.id].timing = {
           startedAt: new Date(startMs).toISOString(),
           completedAt: new Date().toISOString(),
           durationMs: Date.now() - startMs,
         };
-        saveTree(freshTree);
-        console.log(`[viveka-expand] done in ${Date.now() - startMs}ms`);
+        saveWorkspace(freshWs);
+        console.log(`[expand] done in ${Date.now() - startMs}ms`);
       }
     })
     .catch((err) => {
-      const freshTree = getTree(treeId);
-      if (freshTree && freshTree.nodes[expansionNode.id]) {
-        freshTree.nodes[expansionNode.id].status = "error";
-        freshTree.nodes[expansionNode.id].error = String(err);
-        saveTree(freshTree);
+      const freshWs = getWorkspace(treeId);
+      if (freshWs && freshWs.fragments[expansionFrag.id]) {
+        freshWs.fragments[expansionFrag.id].status = "error";
+        freshWs.fragments[expansionFrag.id].error = String(err);
+        saveWorkspace(freshWs);
       }
     });
 
   return NextResponse.json({
-    nodeId: expansionNode.id,
+    nodeId: expansionFrag.id,
     status: "generating",
   });
 }

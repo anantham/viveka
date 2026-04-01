@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createTree } from "@/lib/tree";
-import { saveTree } from "@/lib/tree-store";
+import { createWorkspace } from "@/lib/workspace";
+import { saveWorkspace } from "@/lib/workspace-store";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -10,8 +10,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "intent and completionCondition required" }, { status: 400 });
   }
 
-  const tree = createTree(intent, completionCondition, mode || "instrumental", settings);
-  saveTree(tree);
+  const ws = createWorkspace(intent, completionCondition, mode || "instrumental", settings);
+  saveWorkspace(ws);
 
-  return NextResponse.json(tree);
+  return NextResponse.json(ws);
 }

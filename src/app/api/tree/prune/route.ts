@@ -1,18 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree, saveTree } from "@/lib/tree-store";
-import { pruneNode, unpruneNode } from "@/lib/tree";
+import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
+import { removeFromSequence, appendToSequence } from "@/lib/workspace";
 
 export async function POST(req: NextRequest) {
   const { treeId, nodeId, pruned } = await req.json();
-  const tree = getTree(treeId);
-  if (!tree) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
+  const ws = getWorkspace(treeId);
+  if (!ws) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
 
   if (pruned) {
-    pruneNode(tree, nodeId);
+    removeFromSequence(ws, nodeId);
+    ws.opLog.push({ type: "prune", fragmentId: nodeId, timestamp: new Date().toISOString() });
   } else {
-    unpruneNode(tree, nodeId);
+    appendToSequence(ws, nodeId);
+    ws.opLog.push({ type: "restore", fragmentId: nodeId, timestamp: new Date().toISOString() });
   }
-  saveTree(tree);
+  saveWorkspace(ws);
 
-  return NextResponse.json({ activePathIds: tree.activePathIds });
+  return NextResponse.json({ sequence: ws.sequence });
 }

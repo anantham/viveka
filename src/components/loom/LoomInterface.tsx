@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ConversationTree, getActivePath, getSiblings } from "@/lib/tree";
+import type { Workspace, Fragment } from "@/lib/workspace";
+import { getSiblings as getWsSiblings, getChildren } from "@/lib/workspace";
+import type { TreeNode, ConversationTree } from "@/lib/tree";
 import { Session, ContextBlock, estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
 import ChatBubbleView from "./ChatBubbleView";
 import ReaderView from "./ReaderView";
@@ -13,10 +15,70 @@ import ContextPanel from "../ContextPanel";
 import LLMSettings from "../LLMSettings";
 
 interface LoomInterfaceProps {
-  initialTree: ConversationTree;
+  initialTree: Workspace;
 }
 
-type View = "chat" | "tree" | "split" | "canvas";
+/**
+ * Convert a Fragment to a TreeNode-compatible shape for legacy views.
+ * This shim lets us migrate views one at a time.
+ */
+function fragmentToNode(f: Fragment, ws: Workspace): TreeNode {
+  const isAI = f.provenance.type === "ai-generated" || f.provenance.type === "derived";
+  // Find parent via edges
+  const parentEdge = ws.edges.find((e) => e.to === f.id && e.type === "responded-to");
+  // Find children via edges
+  const childEdges = ws.edges.filter((e) => e.from === f.id && e.type === "responded-to");
+
+  return {
+    id: f.id,
+    parentId: parentEdge?.from ?? null,
+    role: f.provenance.type === "system" ? "system" : isAI ? "assistant" : "user",
+    content: f.content,
+    childIds: childEdges.map((e) => e.to),
+    source: isAI ? "ai-completion" : "human",
+    status: f.status,
+    pruned: false,
+    selected: ws.sequence.includes(f.id),
+    version: f.version,
+    previousVersions: f.previousVersions,
+    createdAt: f.createdAt,
+    model: f.provenance.model,
+    error: f.error,
+    timing: f.timing,
+    provenance: f.provenance,
+  };
+}
+
+/**
+ * Build a legacy ConversationTree shape from Workspace for views that still need it.
+ */
+function wsToLegacyTree(ws: Workspace): ConversationTree {
+  const nodes: Record<string, TreeNode> = {};
+  for (const f of Object.values(ws.fragments)) {
+    nodes[f.id] = fragmentToNode(f, ws);
+  }
+  // Find root (fragment with no parent edge)
+  const hasParent = new Set(ws.edges.filter((e) => e.type === "responded-to").map((e) => e.to));
+  const rootId = Object.keys(ws.fragments).find((id) => !hasParent.has(id)) || ws.sequence[0] || "";
+
+  return {
+    id: ws.id,
+    createdAt: ws.createdAt,
+    intent: ws.intent,
+    completionCondition: ws.completionCondition,
+    mode: ws.mode,
+    nodes,
+    rootId,
+    activePathIds: ws.sequence,
+    settings: ws.settings,
+    contextBlockIds: ws.contextBlockIds,
+    canvasPositions: ws.canvasPositions,
+    sequence: ws.sequence,
+    opLog: ws.opLog as ConversationTree["opLog"],
+  };
+}
+
+type View = "chat" | "reader" | "tree" | "split" | "canvas";
 
 /** An entry in the node-level undo stack. Stores the content before a mutation. */
 interface UndoEntry {
@@ -27,8 +89,21 @@ interface UndoEntry {
 
 const MAX_UNDO_STACK = 50;
 
+/** Get siblings as TreeNode[] for legacy views */
+function getSiblings(tree: ConversationTree, nodeId: string): TreeNode[] {
+  const node = tree.nodes[nodeId];
+  if (!node || !node.parentId) return [node].filter(Boolean);
+  const parent = tree.nodes[node.parentId];
+  if (!parent) return [node];
+  return parent.childIds
+    .map((id) => tree.nodes[id])
+    .filter((n): n is TreeNode => !!n && !n.pruned);
+}
+
 export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
-  const [tree, setTree] = useState(initialTree);
+  const [ws, setWs] = useState(initialTree);
+  // Legacy tree shape for views that haven't migrated yet
+  const tree = wsToLegacyTree(ws);
   const [view, setView] = useState<View>("split");
   const [input, setInput] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -44,48 +119,85 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const undoStackRef = useRef<UndoEntry[]>([]);
 
   // Poll for generating nodes
-  const hasGenerating = Object.values(tree.nodes).some(
-    (n) => n.status === "generating"
+  const hasGenerating = Object.values(ws.fragments).some(
+    (f) => f.status === "generating"
   );
+  const pollingRef = useRef(false);
 
   useEffect(() => {
-    if (hasGenerating && !polling) {
-      setPolling(true);
-      pollRef.current = setInterval(async () => {
-        try {
-          const res = await fetch("/api/tree/get", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: tree.id }),
-          });
-          const freshTree = await res.json();
-          if (!freshTree.error) {
-            setTree(freshTree);
-            const stillGenerating = Object.values(
-              freshTree.nodes as Record<string, { status: string }>
-            ).some((n) => n.status === "generating");
-            if (!stillGenerating) {
-              if (pollRef.current) clearInterval(pollRef.current);
-              setPolling(false);
-            }
-          }
-        } catch {
-          // ignore polling errors
-        }
-      }, 1500);
+    if (!hasGenerating) {
+      // Nothing generating — stop any active poll
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      if (pollingRef.current) {
+        console.log(`[viveka-ui] polling stopped — no more generating nodes`);
+        pollingRef.current = false;
+        setPolling(false);
+      }
+      return;
     }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [hasGenerating, polling, tree.id]);
 
-  const activePath = getActivePath(tree);
+    // Has generating nodes — start polling if not already
+    if (pollingRef.current) return;
+    pollingRef.current = true;
+    setPolling(true);
+
+    const pollStart = performance.now();
+    let pollCount = 0;
+    const treeId = tree.id;
+    console.log(`[viveka-ui] polling started at ${new Date().toISOString().slice(11, 23)}`);
+
+    pollRef.current = setInterval(async () => {
+      pollCount++;
+      try {
+        const res = await fetch("/api/tree/get", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: treeId }),
+        });
+        const freshTree = await res.json();
+        if (!freshTree.error) {
+          setWs(freshTree);
+          const stillGenerating = Object.values(
+            freshTree.nodes as Record<string, { status: string }>
+          ).some((n) => n.status === "generating");
+          if (!stillGenerating) {
+            console.log(`[viveka-ui] polling done after ${pollCount} polls, ${(performance.now() - pollStart).toFixed(0)}ms total`);
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            pollingRef.current = false;
+            setPolling(false);
+          }
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 1500);
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      pollingRef.current = false;
+    };
+  }, [hasGenerating, tree.id]);
+
+  // Active path = sequence fragments converted to TreeNode for legacy views
+  const activePath = ws.sequence
+    .map((id) => ws.fragments[id])
+    .filter((f): f is Fragment => !!f)
+    .map((f) => fragmentToNode(f, ws));
   const lastNode = activePath[activePath.length - 1];
 
   // Sibling counts for bubble indicators
   const siblingCounts: Record<string, number> = {};
   for (const node of activePath) {
-    const sibs = getSiblings(tree, node.id);
+    const sibs = getWsSiblings(ws, node.id);
     siblingCounts[node.id] = sibs.length;
   }
 
@@ -93,11 +205,11 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     const res = await fetch("/api/tree/get", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: tree.id }),
+      body: JSON.stringify({ id: ws.id }),
     });
     const data = await res.json();
-    if (!data.error) setTree(data);
-  }, [tree.id]);
+    if (!data.error) setWs(data);
+  }, [ws.id]);
 
   // --- Session-based features bridge ---
 
@@ -106,18 +218,19 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
       const res = await fetch("/api/tree/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ treeId: tree.id }),
+        body: JSON.stringify({ treeId: ws.id }),
       });
       const data = await res.json();
       if (!data.error) setVirtualSession(data);
     } catch {
       // session overlay is non-critical
     }
-  }, [tree.id]);
+  }, [ws.id]);
 
   // When generation completes, refresh the virtual session
   useEffect(() => {
     if (prevHasGenerating.current && !hasGenerating) {
+      console.log(`[viveka-ui] all generations complete at ${new Date().toISOString().slice(11, 23)}`);
       fetchVirtualSession();
     }
     prevHasGenerating.current = hasGenerating;
@@ -127,7 +240,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   useEffect(() => {
     fetchVirtualSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree.id]);
+  }, [ws.id]);
 
   const handleExportToObsidian = async () => {
     setExporting(true);
@@ -211,11 +324,12 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   };
 
   const sendUserMessage = async (message: string) => {
-    // Add user node
+    const t0 = performance.now();
+    console.log(`[viveka-ui] send: "${message.slice(0, 50)}..." at ${new Date().toISOString().slice(11, 23)}`);
+
     const parentId = lastNode?.id;
     if (!parentId) return;
 
-    // Create user node by adding to tree manually
     const res = await fetch("/api/tree/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -226,8 +340,10 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
       }),
     });
     const data = await res.json();
+    console.log(`[viveka-ui] generate API returned in ${(performance.now() - t0).toFixed(0)}ms — ${data.nodeIds?.length ?? 0} pending nodes`);
     if (!data.error) {
       await refreshTree();
+      console.log(`[viveka-ui] tree refreshed at ${(performance.now() - t0).toFixed(0)}ms — now polling for completions`);
     }
   };
 
@@ -242,11 +358,14 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
 
   const handleReroll = async () => {
     if (!lastNode || lastNode.role !== "user") return;
+    const t0 = performance.now();
+    console.log(`[viveka-ui] reroll started at ${new Date().toISOString().slice(11, 23)}`);
     await fetch("/api/tree/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ treeId: tree.id, parentId: lastNode.id }),
     });
+    console.log(`[viveka-ui] reroll API returned in ${(performance.now() - t0).toFixed(0)}ms`);
     await refreshTree();
   };
 
@@ -255,12 +374,17 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     const parentId = lastNode.role === "assistant" ? lastNode.id : lastNode.parentId;
     if (!parentId) return;
 
-    await fetch("/api/tree/draft", {
+    const t0 = performance.now();
+    console.log(`[viveka-ui] draft started at ${new Date().toISOString().slice(11, 23)}`);
+    const res = await fetch("/api/tree/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ treeId: tree.id, parentId }),
     });
+    const data = await res.json();
+    console.log(`[viveka-ui] draft API returned in ${(performance.now() - t0).toFixed(0)}ms`, data.error || `${data.nodeIds?.length ?? 0} pending`);
     await refreshTree();
+    console.log(`[viveka-ui] draft tree refreshed at ${(performance.now() - t0).toFixed(0)}ms — polling for completions`);
   };
 
   const pushUndo = useCallback((nodeId: string, previousContent: string) => {
@@ -301,6 +425,33 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     });
     await refreshTree();
   }, [tree.id, refreshTree]);
+
+  const handleSplitRange = async (nodeId: string, charStart: number, charEnd: number) => {
+    await fetch("/api/tree/split-range", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ treeId: tree.id, fragmentId: nodeId, charStart, charEnd }),
+    });
+    await refreshTree();
+  };
+
+  const handleMoveFragment = async (fragmentId: string, toIndex: number) => {
+    await fetch("/api/tree/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ treeId: tree.id, fragmentId, toIndex }),
+    });
+    await refreshTree();
+  };
+
+  const handleZoneTransfer = async (fragmentId: string, toZone: string) => {
+    await fetch("/api/tree/zone", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ treeId: tree.id, fragmentId, toZone }),
+    });
+    await refreshTree();
+  };
 
   const handlePrune = async (nodeId: string) => {
     await fetch("/api/tree/prune", {
@@ -346,7 +497,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
         return;
       }
 
-      const viewMap: Record<string, View> = { "1": "chat", "2": "split", "3": "tree", "4": "canvas" };
+      const viewMap: Record<string, View> = { "1": "chat", "2": "reader", "3": "split", "4": "tree", "5": "canvas" };
       if (viewMap[e.key]) {
         e.preventDefault();
         setView(viewMap[e.key]);
@@ -410,7 +561,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           >
             {exporting ? "exporting..." : "export"}
           </button>
-          {(["chat", "split", "tree", "canvas"] as const).map((v) => (
+          {(["chat", "reader", "split", "tree", "canvas"] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -501,6 +652,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onNodeSelect={handleNodeSelect}
               onNodeEdit={handleEdit}
               onRefreshTree={refreshTree}
+              onSplitRange={handleSplitRange}
               isGenerating={hasGenerating}
             />
           </div>
@@ -513,6 +665,30 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               nodes={activePath}
               onEdit={handleEdit}
               onNodeClick={handleNodeSelect}
+              onSplitRange={handleSplitRange}
+              onMoveToStage={(nodeId) => handleZoneTransfer(nodeId, "stage")}
+              siblingCounts={siblingCounts}
+              onNavigateSibling={async (nodeId, direction) => {
+                const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);
+                const idx = sibs.findIndex((n) => n.id === nodeId);
+                const nextIdx = direction === "next"
+                  ? (idx + 1) % sibs.length
+                  : (idx - 1 + sibs.length) % sibs.length;
+                if (sibs[nextIdx]) await handleNodeSelect(sibs[nextIdx].id);
+              }}
+            />
+          </div>
+        )}
+
+        {/* Reader view — full width, fragment editing surface */}
+        {view === "reader" && (
+          <div className="w-full overflow-y-auto">
+            <ReaderView
+              nodes={activePath}
+              onEdit={handleEdit}
+              onNodeClick={handleNodeSelect}
+              onSplitRange={handleSplitRange}
+              onMoveToStage={(nodeId) => handleZoneTransfer(nodeId, "stage")}
               siblingCounts={siblingCounts}
               onNavigateSibling={async (nodeId, direction) => {
                 const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);

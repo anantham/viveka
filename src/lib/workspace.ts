@@ -30,7 +30,7 @@ export interface GenerationParams {
 }
 
 export interface Provenance {
-  type: "human-typed" | "ai-generated" | "split" | "extracted" | "imported" | "merged" | "system";
+  type: "human-typed" | "ai-generated" | "split" | "extracted" | "imported" | "merged" | "derived" | "system";
   model?: string;
   prompt?: string;
   params?: GenerationParams;

@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree } from "@/lib/tree-store";
+import { getWorkspace } from "@/lib/workspace-store";
 
 export async function POST(req: NextRequest) {
   const { id } = await req.json();
-  const tree = getTree(id);
-  if (!tree) {
+  const ws = getWorkspace(id);
+  if (!ws) {
     return NextResponse.json({ error: "Tree not found" }, { status: 404 });
   }
-  return NextResponse.json(tree);
+  return NextResponse.json(ws);
 }

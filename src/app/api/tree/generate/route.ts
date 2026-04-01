@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTree, saveTree } from "@/lib/tree-store";
+import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
 import {
-  addNode,
-  addPendingNodes,
-  selectNode,
-  updateNodeContent,
+  addFragment,
+  addEdge,
+  appendToSequence,
+  updateFragmentContent,
   getConversationHistory,
-} from "@/lib/tree";
+} from "@/lib/workspace";
 import { queryClaudeCode } from "@/lib/claude";
 import { buildSystemPrompt } from "@/lib/system-prompt";
 import { Session } from "@/lib/types";
 
 /**
- * Generate N assistant completions for a given parent node.
- * Fires N parallel claude -p calls and returns immediately with pending node IDs.
+ * Generate N assistant completions for a given parent fragment.
+ * Fires N parallel LLM calls and returns immediately with pending fragment IDs.
  * Completions fill in lazily (poll /api/tree/get to see updates).
  */
 export async function POST(req: NextRequest) {
@@ -22,41 +22,46 @@ export async function POST(req: NextRequest) {
     treeId: string;
     parentId: string;
     count?: number;
-    userMessage?: string; // if provided, create a user node first
+    userMessage?: string;
   };
 
-  const tree = getTree(treeId);
-  if (!tree) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
+  console.log(`[generate] request: treeId=${treeId?.slice(0, 8)} parentId=${parentId?.slice(0, 8)} count=${count} userMsg=${userMessage ? userMessage.slice(0, 50) + "..." : "none"}`);
 
-  // If userMessage provided, create user node first, then use it as parent
+  const ws = getWorkspace(treeId);
+  if (!ws) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
+
+  // If userMessage provided, create user fragment first
   let actualParentId = parentId;
   if (userMessage) {
-    const userNode = addNode(tree, parentId, "user", userMessage, "human", "complete");
-    selectNode(tree, userNode.id);
-    actualParentId = userNode.id;
-    saveTree(tree);
+    const userFrag = addFragment(ws, userMessage, { type: "human-typed" });
+    addEdge(ws, parentId, userFrag.id, "responded-to");
+    appendToSequence(ws, userFrag.id);
+    actualParentId = userFrag.id;
+    saveWorkspace(ws);
   }
 
-  const parent = tree.nodes[actualParentId];
-  if (!parent) return NextResponse.json({ error: "Parent node not found" }, { status: 404 });
+  const parentFrag = ws.fragments[actualParentId];
+  if (!parentFrag) return NextResponse.json({ error: "Parent not found" }, { status: 404 });
 
-  const n = count ?? tree.settings.rerollCount;
+  const n = count ?? ws.settings.rerollCount;
 
-  // Create pending nodes
-  const pendingNodes = addPendingNodes(tree, actualParentId, "assistant", "ai-completion", n);
-  saveTree(tree);
+  // Create pending fragments
+  const pendingFragments: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const f = addFragment(ws, "", { type: "ai-generated", model: ws.settings.model }, "generating");
+    addEdge(ws, actualParentId, f.id, "responded-to");
+    pendingFragments.push(f.id);
+  }
+  saveWorkspace(ws);
 
-  // Build conversation history from active path up to parent
-  selectNode(tree, actualParentId);
-  const history = getConversationHistory(tree);
-
-  // Build a stub session for the system prompt builder
+  // Build context
+  const history = getConversationHistory(ws);
   const stubSession: Session = {
-    id: tree.id,
-    createdAt: tree.createdAt,
-    intent: tree.intent,
-    completionCondition: tree.completionCondition,
-    mode: tree.mode as Session["mode"],
+    id: ws.id,
+    createdAt: ws.createdAt,
+    intent: ws.intent,
+    completionCondition: ws.completionCondition,
+    mode: ws.mode as Session["mode"],
     budget: 999,
     exchanges: [],
     status: "active",
@@ -66,19 +71,18 @@ export async function POST(req: NextRequest) {
     interventionLog: [],
   };
   const systemPrompt = buildSystemPrompt(stubSession);
-  const model = tree.settings.model || process.env.VIVEKA_MODEL || "sonnet";
+  const model = ws.settings.model || process.env.VIVEKA_MODEL || "sonnet";
+  const promptMessage = parentFrag.provenance.type === "human-typed" ? parentFrag.content : "";
 
-  // The parent node's content is the latest user message
-  const promptMessage = parent.role === "user" ? parent.content : "";
+  const historyTokenEst = history.reduce((s, h) => s + h.content.length, 0);
+  console.log(`[generate] firing ${n} parallel completions | model=${model} | history=${history.length} msgs (~${historyTokenEst} chars) | prompt="${promptMessage.slice(0, 80)}..."`);
 
-  // Fire N parallel completions
-  const nodeIds = pendingNodes.map((n) => n.id);
-
-  // Don't await — let them run in background with timing
+  // Fire N parallel completions (don't await)
   Promise.all(
-    pendingNodes.map(async (pendingNode) => {
+    pendingFragments.map(async (fragId, i) => {
       const startedAt = new Date().toISOString();
       const startMs = Date.now();
+      console.log(`[generate] completion ${i + 1}/${n} (${fragId.slice(0, 8)}) starting...`);
       try {
         const response = await queryClaudeCode(
           promptMessage,
@@ -88,41 +92,44 @@ export async function POST(req: NextRequest) {
         );
 
         const durationMs = Date.now() - startMs;
-        const freshTree = getTree(treeId);
-        if (freshTree) {
-          updateNodeContent(freshTree, pendingNode.id, response.text, "complete");
-          freshTree.nodes[pendingNode.id].model = model;
-          freshTree.nodes[pendingNode.id].timing = {
+        const freshWs = getWorkspace(treeId);
+        if (freshWs && freshWs.fragments[fragId]) {
+          updateFragmentContent(freshWs, fragId, response.text);
+          freshWs.fragments[fragId].provenance.model = model;
+          freshWs.fragments[fragId].timing = {
             startedAt,
             completedAt: new Date().toISOString(),
             durationMs,
           };
-          saveTree(freshTree);
-          console.log(`[viveka-loom] completion ${pendingNode.id.slice(0, 8)} done in ${durationMs}ms`);
+          // Add first completion to sequence automatically
+          if (i === 0) {
+            appendToSequence(freshWs, fragId);
+          }
+          saveWorkspace(freshWs);
+          console.log(`[generate] completion ${i + 1}/${n} (${fragId.slice(0, 8)}) DONE in ${durationMs}ms | ${response.text.length} chars | tokens: in=${response.usage?.inputTokens ?? "?"} out=${response.usage?.outputTokens ?? "?"}`);
         }
       } catch (err) {
         const durationMs = Date.now() - startMs;
-        const freshTree = getTree(treeId);
-        if (freshTree && freshTree.nodes[pendingNode.id]) {
-          freshTree.nodes[pendingNode.id].status = "error";
-          freshTree.nodes[pendingNode.id].error =
-            err instanceof Error ? err.message : String(err);
-          freshTree.nodes[pendingNode.id].timing = {
+        console.error(`[generate] completion ${i + 1}/${n} (${fragId.slice(0, 8)}) FAILED in ${durationMs}ms:`, err instanceof Error ? err.message : err);
+        const freshWs = getWorkspace(treeId);
+        if (freshWs && freshWs.fragments[fragId]) {
+          freshWs.fragments[fragId].status = "error";
+          freshWs.fragments[fragId].error = err instanceof Error ? err.message : String(err);
+          freshWs.fragments[fragId].timing = {
             startedAt,
             completedAt: new Date().toISOString(),
             durationMs,
           };
-          saveTree(freshTree);
+          saveWorkspace(freshWs);
         }
       }
     })
   ).then(() => {
-    console.log(`[viveka-loom] ${n} completions done for ${actualParentId}`);
+    console.log(`[generate] all ${n} completions finished for parent ${actualParentId.slice(0, 8)}`);
   });
 
-  // Return immediately with the pending node IDs
   return NextResponse.json({
-    nodeIds,
+    nodeIds: pendingFragments,
     status: "generating",
     message: `${n} completions started`,
   });

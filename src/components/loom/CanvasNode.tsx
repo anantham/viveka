@@ -22,6 +22,7 @@ interface CanvasNodeProps {
   onRerollComplete?: () => void;
   onTangentSplit?: (nodeId: string, charPosition: number) => void;
   onVersionRevert?: (nodeId: string, content: string) => void;
+  onSplitRange?: (nodeId: string, charStart: number, charEnd: number) => void;
 }
 
 export default function CanvasNode({
@@ -41,6 +42,7 @@ export default function CanvasNode({
   onRerollComplete,
   onTangentSplit,
   onVersionRevert,
+  onSplitRange,
 }: CanvasNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const isDraggingNode = useRef(false);
@@ -50,6 +52,12 @@ export default function CanvasNode({
   const [isDragOver, setIsDragOver] = useState(false);
   const [isRerolling, setIsRerolling] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [splitToolbar, setSplitToolbar] = useState<{
+    charStart: number;
+    charEnd: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const rerollDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Measure height after render
@@ -228,6 +236,37 @@ export default function CanvasNode({
     },
     [cursorTool, isEditing, isRerolling, treeId, node.id, node.content, onRerollComplete]
   );
+
+  // --- Text selection → split toolbar (Select mode) ---
+  const handleTextMouseUp = useCallback(() => {
+    if (cursorTool !== "select" || isEditing) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setSplitToolbar(null);
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text || text.length < 2) {
+      setSplitToolbar(null);
+      return;
+    }
+    const charStart = node.content.indexOf(text);
+    if (charStart === -1) {
+      setSplitToolbar(null);
+      return;
+    }
+    const charEnd = charStart + text.length;
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    const nodeRect = nodeRef.current?.getBoundingClientRect();
+    if (!nodeRect) return;
+    setSplitToolbar({
+      charStart,
+      charEnd,
+      x: rect.left + rect.width / 2 - nodeRect.left,
+      y: rect.top - nodeRect.top - 8,
+    });
+  }, [cursorTool, isEditing, node.content]);
 
   // --- Inline editing ---
   const handleDoubleClick = useCallback(() => {
@@ -463,9 +502,33 @@ export default function CanvasNode({
         ) : node.status === "error" ? (
           <div className="text-red-400">Error: {node.error || "generation failed"}</div>
         ) : (
-          <div className="whitespace-pre-wrap select-text">{node.content}</div>
+          <div className="whitespace-pre-wrap select-text" onMouseUp={handleTextMouseUp}>{node.content}</div>
         )}
       </div>
+
+      {/* Split toolbar — appears on text selection in select mode */}
+      {splitToolbar && onSplitRange && (
+        <div
+          className="absolute z-50 flex gap-1 bg-stone-800 border border-stone-600 rounded-lg shadow-xl px-1.5 py-1 -translate-x-1/2 -translate-y-full pointer-events-auto"
+          style={{
+            left: splitToolbar.x,
+            top: splitToolbar.y,
+          }}
+        >
+          <button
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onSplitRange(node.id, splitToolbar.charStart, splitToolbar.charEnd);
+              setSplitToolbar(null);
+              window.getSelection()?.removeAllRanges();
+            }}
+            className="text-xs px-2 py-0.5 text-stone-300 hover:bg-stone-700 rounded transition-colors"
+          >
+            split
+          </button>
+        </div>
+      )}
 
       {/* Reading order badge */}
       {inContext && (

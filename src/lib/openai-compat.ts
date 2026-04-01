@@ -5,6 +5,12 @@
 import type { ClaudeResponse, UsageInfo } from "./claude";
 import { loadLLMConfig } from "./llm-config";
 
+function log(stage: string, detail: string, ms?: number) {
+  const ts = new Date().toISOString().slice(11, 23);
+  const timing = ms !== undefined ? ` (${ms}ms)` : "";
+  console.log(`[LLM ${ts}] ${stage}: ${detail}${timing}`);
+}
+
 export interface OpenAICompatConfig {
   baseUrl: string;
   apiKey: string;
@@ -22,6 +28,8 @@ export function getOpenAICompatConfig(): OpenAICompatConfig | null {
   const backend = runtimeConfig.backend !== "claude"
     ? runtimeConfig.backend
     : process.env.VIVEKA_LLM_BACKEND;
+
+  log("config", `backend=${backend ?? "claude"}, runtime=${runtimeConfig.backend}`);
 
   if (backend === "ollama") {
     return {
@@ -64,12 +72,18 @@ export async function queryOpenAICompat(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }>,
   config: OpenAICompatConfig
 ): Promise<ClaudeResponse> {
+  const t0 = Date.now();
   const messages = [
     { role: "system" as const, content: systemPrompt },
     ...conversationHistory,
     { role: "user" as const, content: prompt },
   ];
 
+  const msgCount = messages.length;
+  const promptChars = messages.reduce((s, m) => s + m.content.length, 0);
+  log("request", `${config.model} via ${config.baseUrl} | ${msgCount} msgs, ~${promptChars} chars`);
+
+  const t1 = Date.now();
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -82,15 +96,19 @@ export async function queryOpenAICompat(
       stream: false,
     }),
   });
+  const t2 = Date.now();
+  log("fetch", `HTTP ${response.status}`, t2 - t1);
 
   if (!response.ok) {
     const errorText = await response.text();
+    log("error", `${response.status}: ${errorText.slice(0, 200)}`);
     throw new Error(
       `LLM API error (${response.status}): ${errorText}`
     );
   }
 
   const data = await response.json();
+  const t3 = Date.now();
   const text = data.choices?.[0]?.message?.content?.trim() || "";
 
   const usage: UsageInfo | null = data.usage
@@ -102,6 +120,8 @@ export async function queryOpenAICompat(
         costUSD: 0,
       }
     : null;
+
+  log("response", `${text.length} chars | in=${usage?.inputTokens ?? "?"} out=${usage?.outputTokens ?? "?"} tokens`, t3 - t0);
 
   return { text, raw: JSON.stringify(data), rateLimit: null, usage };
 }
