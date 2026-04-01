@@ -145,13 +145,21 @@ export default function WorkspaceCanvas({
   }, [ws.edges]);
 
   // Fragments NOT in sequence or stage but completed (available to pick)
+  // Excludes: system fragments, consumed split originals, empty content
+  const splitSourceIds = useMemo(() => {
+    return new Set(ws.edges.filter((e) => e.type === "split-from").map((e) => e.from));
+  }, [ws.edges]);
+
   const unplacedFragments = useMemo(() => {
     const inSeq = new Set(ws.sequence);
     const inStage = new Set(ws.stageIds);
     return Object.values(ws.fragments).filter(
-      (f) => !inSeq.has(f.id) && !inStage.has(f.id) && f.status === "complete" && f.content && f.provenance.type !== "system"
+      (f) => !inSeq.has(f.id) && !inStage.has(f.id) &&
+        f.status === "complete" && f.content &&
+        f.provenance.type !== "system" &&
+        !splitSourceIds.has(f.id) // exclude consumed split originals
     );
-  }, [ws.fragments, ws.sequence, ws.stageIds]);
+  }, [ws.fragments, ws.sequence, ws.stageIds, splitSourceIds]);
 
   // Generating fragments
   const generatingFragments = useMemo(

@@ -386,6 +386,13 @@ export function splitFragment(
     });
   }
 
+  // Mark original as consumed — keep for lineage but hide from all views
+  original.status = "pending"; // reuse "pending" as "consumed/hidden"
+  original.content = `[split into ${resultIds.length} fragments]`;
+
+  // Remove original's canvas position
+  delete ws.canvasPositions[fragmentId];
+
   ws.opLog.push({
     type: "split",
     sourceFragmentId: fragmentId,
