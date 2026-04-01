@@ -1,14 +1,117 @@
-# ADR-002: Workspace Data Model — Requirements
+# ADR-002: Workspace Data Model
 
-Status: Draft
-Date: 2026-03-31
+Status: **Accepted**
+Date: 2026-03-31 (requirements), 2026-04-01 (design decision)
 Author: Aditya / Claude
 
 ## Context
 
 Viveka v0.1 uses a `ConversationTree` data model where `TreeNode` = a conversation turn. This was the right starting point but the model constrains what we can build. The fundamental reframe: **text fragments are the primitive, not conversation turns.** The system is not a chat — it's a text workspace with provenance tracking where both humans and AI models are operators on a shared surface.
 
-Before deciding on the data model shape (the HOW), this document captures everything the model needs to support (the WHAT).
+## Decision: Three Independent Structures (Option 3)
+
+The workspace has three independent structures that answer different questions:
+
+1. **Fragments** — the atoms of content, keyed by ID
+2. **Edges** — generative history ("where did this come from?")
+3. **Sequence** — reading order ("what order should this be read in?")
+4. **Positions** — spatial layout ("where is this on the canvas?")
+
+These never observe each other. Operations are the single point of coordination — the operation handler is the only thing that knows what to update where. Views are pure projections that read one or more structures.
+
+### Data Model
+
+```typescript
+interface Fragment {
+  id: string;
+  content: string;
+  provenance: Provenance;
+  createdAt: string;
+  status: "pending" | "generating" | "complete" | "error";
+  version: number;
+  previousVersions: string[];
+  error?: string;
+  timing?: { startedAt: string; completedAt: string; durationMs: number };
+}
+
+interface Edge {
+  from: string;      // fragment ID
+  to: string;        // fragment ID
+  type: "responded-to" | "split-from" | "derived" | "imported-from";
+}
+
+interface Workspace {
+  id: string;
+  createdAt: string;
+  intent: string;
+  completionCondition: string;
+  mode: string;
+
+  // The three independent structures
+  fragments: Record<string, Fragment>;
+  edges: Edge[];
+  sequence: string[];           // workspace reading order (fragment IDs)
+  stageIds: string[];           // fragments visible to human, not in AI context
+  canvasPositions: Record<string, { x: number; y: number }>;
+
+  // Audit trail
+  opLog: Operation[];
+
+  // Settings
+  settings: {
+    rerollCount: number;
+    draftCount: number;
+    model: string;
+  };
+  contextBlockIds: string[];
+}
+```
+
+### How Views Read
+
+| View | Reads | Renders |
+|---|---|---|
+| **Reader** | `sequence` → fragments in order | Linear prose, provenance colors |
+| **Canvas** | `canvasPositions` (or derive from sequence) + all non-pruned fragments | Spatial layout, edges drawn between connected fragments |
+| **Tree** | `edges` where type = "responded-to" | Branching tree with sibling navigation |
+| **Chat** | `sequence` → fragments alternating by provenance | Legacy conversation bubbles |
+| **Stage** | `stageIds` → fragments | Browsable reference material |
+
+### How Operations Coordinate
+
+Every mutation goes through `applyOperation(workspace, op) → workspace`. The handler decides which structures to update:
+
+| Operation | Edges | Sequence | Positions |
+|---|---|---|---|
+| Human types text | — | append | auto-position |
+| AI generates completion | add responded-to | — (user picks) | near parent |
+| User picks a completion | — | insert | — |
+| Split fragment | add split-from | replace 1 with 2-3 | inherit, offset |
+| Move fragment | — | reorder | clear override |
+| Stage → Workspace | — | append | auto-position |
+| Workspace → Stage | — | remove | keep |
+| Prune | — | remove | — |
+| Reroll | add derived | swap | inherit |
+
+**Rules:**
+- Edges are append-only (history is never rewritten)
+- Sequence is mutable (human arranges freely)
+- Positions default-derive from sequence index, user overrides stick
+- Creating an edge doesn't auto-add to sequence — human decides what enters reading order
+
+### Migration from ConversationTree
+
+- `TreeNode` → `Fragment` (rename + add provenance)
+- `parentId/childIds` → `Edge[]` with type "responded-to"
+- `activePathIds` → `sequence`
+- `canvasPositions` → stays as-is
+- Old trees load through an adapter that converts on read
+
+---
+
+## Requirements
+
+Below captures everything the model needs to support (the WHAT).
 
 ---
 
