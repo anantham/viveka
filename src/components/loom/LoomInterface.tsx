@@ -115,6 +115,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [contextBlocks, setContextBlocks] = useState<ContextBlock[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [exportResult, setExportResult] = useState<{ path?: string; error?: string } | null>(null);
   const prevHasGenerating = useRef(false);
   const undoStackRef = useRef<UndoEntry[]>([]);
@@ -527,6 +528,39 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     (n) => n.childIds.length > 1
   ).length;
 
+  // Fullscreen canvas — no header, no action bar, just the workspace
+  if (fullscreen && view === "canvas") {
+    return (
+      <div className="h-screen w-screen relative">
+        <WorkspaceCanvas
+          workspace={ws}
+          onSplitRange={handleSplitRange}
+          onMoveFragment={handleMoveFragment}
+          onZoneTransfer={handleZoneTransfer}
+          onEdit={handleEdit}
+          onGenerate={handleReroll}
+          onSubmitMessage={sendUserMessage}
+          onSelectFragment={async (fragId) => {
+            await fetch("/api/tree/zone", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ treeId: ws.id, fragmentId: fragId, toZone: "workspace" }),
+            });
+            await refreshTree();
+          }}
+          onRefresh={refreshTree}
+          isGenerating={hasGenerating}
+        />
+        <button
+          onClick={() => setFullscreen(false)}
+          className="absolute top-3 right-3 z-50 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200 hover:bg-stone-700"
+        >
+          exit fullscreen
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen max-w-5xl mx-auto">
       {/* Header */}
@@ -657,6 +691,12 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onRefresh={refreshTree}
               isGenerating={hasGenerating}
             />
+            <button
+              onClick={() => setFullscreen(true)}
+              className="absolute bottom-16 right-3 z-40 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200"
+            >
+              fullscreen
+            </button>
           </div>
         )}
 
@@ -778,8 +818,8 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
         )}
       </div>
 
-      {/* Action bar */}
-      <div className="border-t border-stone-800 bg-stone-900/50">
+      {/* Action bar — hidden in canvas view (canvas has its own input) */}
+      <div className={`border-t border-stone-800 bg-stone-900/50 ${view === "canvas" ? "hidden" : ""}`}>
         {/* Quick actions */}
         <div className="px-4 py-2 flex gap-2 border-b border-stone-800/50">
           <button
