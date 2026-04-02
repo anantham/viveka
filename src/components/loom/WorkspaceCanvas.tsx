@@ -20,7 +20,7 @@ interface WorkspaceCanvasProps {
   onMoveFragment: (fragmentId: string, toIndex: number) => void;
   onZoneTransfer: (fragmentId: string, toZone: string) => void;
   onEdit: (fragmentId: string, content: string) => void;
-  onGenerate: () => void;
+  onGenerate: (parentFragmentId: string) => void;
   onSubmitMessage: (text: string) => void;
   onSelectFragment: (fragmentId: string) => void;
   onRefresh: () => void;
