@@ -3,13 +3,17 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { Workspace, Fragment, Edge } from "@/lib/workspace";
 import { usePanZoom } from "@/hooks/usePanZoom";
+import { usePhysicsSimulation, angleToMergeType } from "@/hooks/usePhysicsSimulation";
+import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
+import { MergeSpinner } from "./MergeSpinner";
 import dagre from "dagre";
+
+type MergeType = "prepend" | "append" | "interleave" | "summarize";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type CursorMode = "select" | "hand";
 type SemanticZoom = "full" | "summary" | "compact" | "dot";
 
 interface Position { x: number; y: number }
@@ -21,6 +25,7 @@ interface WorkspaceCanvasProps {
   onZoneTransfer: (fragmentId: string, toZone: string) => void;
   onEdit: (fragmentId: string, content: string) => void;
   onGenerate: (parentFragmentId: string) => void;
+  onReplace: (fragmentId: string, selectedText: string, fullContent: string) => void;
   onSubmitMessage: (text: string) => void;
   onSelectFragment: (fragmentId: string) => void;
   onRefresh: () => void;
@@ -172,12 +177,12 @@ export default function WorkspaceCanvas({
   onZoneTransfer,
   onEdit,
   onGenerate,
+  onReplace,
   onSubmitMessage,
   onSelectFragment,
   onRefresh,
   isGenerating,
 }: WorkspaceCanvasProps) {
-  const [cursorMode, setCursorMode] = useState<CursorMode>("select");
   const [manualPositions, setManualPositions] = useState<Record<string, Position>>({});
   const [splitToolbar, setSplitToolbar] = useState<{
     fragmentId: string; charStart: number; charEnd: number; x: number; y: number;
@@ -188,6 +193,21 @@ export default function WorkspaceCanvas({
     fragmentId: string; offsetX: number; offsetY: number;
   } | null>(null);
   const [inputText, setInputText] = useState("");
+
+  // Merge candidate state
+  const [mergeCandidate, setMergeCandidate] = useState<{
+    draggedId: string;
+    targetId: string;
+    angle: number;
+    mergeType: MergeType;
+    startedAt: number;
+    confirmed: boolean;
+  } | null>(null);
+
+  // Velocity tracking for physics injection on drag release
+  const lastDragPosRef = useRef<Position | null>(null);
+  const lastDragTimeRef = useRef<number>(0);
+  const lastVelocityRef = useRef<{ vx: number; vy: number }>({ vx: 0, vy: 0 });
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const { state: panZoom, containerRef, handlers: panZoomHandlers } = usePanZoom();
@@ -263,9 +283,9 @@ export default function WorkspaceCanvas({
   // Layout: dagre for sequence, offset for stage/unplaced
   // -----------------------------------------------------------------------
 
-  const positions = useMemo(() => {
-    const nodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 40 : 80;
+  const nodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 40 : 80;
 
+  const basePositions = useMemo(() => {
     // Dagre layout for sequence fragments
     const seqEdges = ws.edges.filter((e) => {
       const seqSet = new Set(ws.sequence);
@@ -291,17 +311,62 @@ export default function WorkspaceCanvas({
       genY += 60;
     }
 
-    // Merge, with manual overrides taking precedence
-    return { ...dagrePos, ...stagePos, ...genPos, ...manualPositions };
+    return { ...dagrePos, ...stagePos, ...genPos };
   }, [sequenceFragments, stageFragments, unplacedFragments, generatingFragments,
-      ws.edges, ws.sequence, semanticZoom, nodeWidth, manualPositions]);
+      ws.edges, ws.sequence, semanticZoom, nodeWidth, nodeH]);
+
+  // -----------------------------------------------------------------------
+  // Physics simulation
+  // -----------------------------------------------------------------------
+
+  const physicsNodeSize = useCallback((id: string) => ({ w: nodeWidth, h: nodeH }), [nodeWidth, nodeH]);
+
+  const { physicsPositions, physicsPositionsRef, inject, wake, killNode, isAwake, pinRestPosition } = usePhysicsSimulation({
+    nodeIds: useMemo(() => allVisible.map((f) => f.id), [allVisible]),
+    initialPositions: ws.canvasPositions ?? {},
+    dagrePositions: basePositions,
+    edges: visibleEdges,
+    nodeSize: physicsNodeSize,
+    pinnedId: dragState?.fragmentId ?? null,
+    pinnedPosition: dragState ? manualPositions[dragState.fragmentId] ?? null : null,
+    onStabilize: useCallback((positions: Record<string, Position>) => {
+      fetch("/api/tree/canvas-positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ treeId: ws.id, positions }),
+      }).catch(() => {}); // fire-and-forget
+    }, [ws.id]),
+    onMergeCandidate: useCallback((info: MergeCandidateInfo) => {
+      setMergeCandidate((prev) => {
+        if (prev?.draggedId === info.draggedId && prev?.targetId === info.targetId) return prev;
+        return {
+          draggedId: info.draggedId,
+          targetId: info.targetId,
+          angle: info.angle,
+          mergeType: angleToMergeType(info.angle),
+          startedAt: Date.now(),
+          confirmed: false,
+        };
+      });
+    }, []),
+    onMergeCancelled: useCallback(() => {
+      setMergeCandidate(null);
+    }, []),
+  });
+
+  // Final positions: physics overrides dagre, manual overrides physics
+  const positions = useMemo(() => ({
+    ...basePositions,
+    ...physicsPositions,
+    ...manualPositions,
+  }), [basePositions, physicsPositions, manualPositions]);
 
   // -----------------------------------------------------------------------
   // Handlers
   // -----------------------------------------------------------------------
 
   const handleTextMouseUp = useCallback((fragmentId: string, content: string) => {
-    if (cursorMode !== "select" || semanticZoom !== "full") return;
+    if (semanticZoom !== "full") return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { setSplitToolbar(null); return; }
     const text = sel.toString().trim();
@@ -318,17 +383,19 @@ export default function WorkspaceCanvas({
       x: (rect.left + rect.width / 2 - cr.left - panZoom.panX) / panZoom.zoom,
       y: (rect.top - cr.top - panZoom.panY) / panZoom.zoom - 8,
     });
-  }, [cursorMode, semanticZoom, panZoom, containerRef]);
+  }, [semanticZoom, panZoom, containerRef]);
 
   const handlePointerDown = useCallback((e: React.PointerEvent, fragmentId: string) => {
-    if (cursorMode !== "hand") return;
     if (editingId) return;
+    // If the pointer landed on text content, let the browser handle text selection
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-text-content]")) return;
     e.preventDefault(); e.stopPropagation();
     const el = e.currentTarget as HTMLElement;
     const rect = el.getBoundingClientRect();
     setDragState({ fragmentId, offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top });
     el.setPointerCapture(e.pointerId);
-  }, [cursorMode, editingId]);
+  }, [editingId]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!dragState) return;
@@ -336,35 +403,105 @@ export default function WorkspaceCanvas({
     const c = containerRef.current;
     if (!c) return;
     const r = c.getBoundingClientRect();
+    const newPos: Position = {
+      x: (e.clientX - r.left - dragState.offsetX) / panZoom.zoom,
+      y: (e.clientY - r.top - dragState.offsetY) / panZoom.zoom,
+    };
+
+    // Track velocity for injection on release
+    const now = Date.now();
+    if (lastDragPosRef.current && lastDragTimeRef.current) {
+      const dt = now - lastDragTimeRef.current;
+      if (dt > 0) {
+        lastVelocityRef.current = {
+          vx: (newPos.x - lastDragPosRef.current.x) / dt * 16, // scale to ~frame units
+          vy: (newPos.y - lastDragPosRef.current.y) / dt * 16,
+        };
+      }
+    }
+    lastDragPosRef.current = newPos;
+    lastDragTimeRef.current = now;
+
     setManualPositions((prev) => ({
       ...prev,
-      [dragState.fragmentId]: {
-        x: (e.clientX - r.left - dragState.offsetX) / panZoom.zoom,
-        y: (e.clientY - r.top - dragState.offsetY) / panZoom.zoom,
-      },
+      [dragState.fragmentId]: newPos,
     }));
   }, [dragState, panZoom.zoom, containerRef]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (dragState) {
+      // Clear merge candidate if not yet confirmed
+      if (mergeCandidate && !mergeCandidate.confirmed) setMergeCandidate(null);
+
+      // Pin the dagre rest target to where the user dropped the node
+      const dropPos = manualPositions[dragState.fragmentId];
+      if (dropPos) {
+        pinRestPosition(dragState.fragmentId, dropPos);
+      }
+
+      // Inject drag velocity into physics so node coasts
+      const v = lastVelocityRef.current;
+      inject(dragState.fragmentId, v.vx, v.vy);
+
+      // Remove manual override — let physics own the position now
+      setManualPositions((prev) => {
+        const next = { ...prev };
+        delete next[dragState.fragmentId];
+        return next;
+      });
+
+      lastDragPosRef.current = null;
+      lastDragTimeRef.current = 0;
+      lastVelocityRef.current = { vx: 0, vy: 0 };
+
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
       setDragState(null);
     }
-  }, [dragState]);
+  }, [dragState, inject, manualPositions, pinRestPosition]);
 
   const startEdit = useCallback((f: Fragment) => { setEditingId(f.id); setEditText(f.content); }, []);
   const saveEdit = useCallback(() => { if (editingId) { onEdit(editingId, editText); setEditingId(null); } }, [editingId, editText, onEdit]);
   const handleSend = useCallback(() => { if (!inputText.trim()) return; onSubmitMessage(inputText.trim()); setInputText(""); }, [inputText, onSubmitMessage]);
 
-  // Keyboard
+
+  // Merge candidate timer: confirm after 2 seconds of continuous overlap
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === " ") { e.preventDefault(); setCursorMode((m) => m === "hand" ? "select" : "hand"); }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
+    if (!mergeCandidate || mergeCandidate.confirmed) return;
+    const elapsed = Date.now() - mergeCandidate.startedAt;
+    const remaining = 2000 - elapsed;
+    if (remaining <= 0) {
+      setMergeCandidate((prev) => prev ? { ...prev, confirmed: true } : null);
+      return;
+    }
+    const id = setTimeout(() => {
+      setMergeCandidate((prev) => prev ? { ...prev, confirmed: true } : null);
+    }, remaining);
+    return () => clearTimeout(id);
+  }, [mergeCandidate]);
+
+  // Fire merge API when confirmed (Phase 7 will add the actual endpoint)
+  useEffect(() => {
+    if (!mergeCandidate?.confirmed) return;
+    const { draggedId, targetId, mergeType } = mergeCandidate;
+    fetch("/api/tree/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        treeId: ws.id,
+        sourceId: draggedId,
+        targetId,
+        mergeType,
+      }),
+    })
+      .then(() => {
+        killNode(draggedId);
+        setMergeCandidate(null);
+        onRefresh();
+      })
+      .catch(() => {
+        setMergeCandidate(null);
+      });
+  }, [mergeCandidate?.confirmed, ws.id, killNode, onRefresh]);
 
   // -----------------------------------------------------------------------
   // Render fragment based on semantic zoom
@@ -440,7 +577,7 @@ export default function WorkspaceCanvas({
     return (
       <div
         key={f.id}
-        className={`absolute ${cursorMode === "hand" ? "cursor-grab active:cursor-grabbing select-none" : "cursor-text"} group`}
+        className="absolute cursor-default group"
         style={{
           left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
           zIndex: dragState?.fragmentId === f.id ? 50 : 1,
@@ -449,10 +586,10 @@ export default function WorkspaceCanvas({
         onPointerDown={(e) => handlePointerDown(e, f.id)}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onDoubleClick={() => cursorMode === "select" && startEdit(f)}
+        onDoubleClick={() => startEdit(f)}
       >
-        <div className={`rounded-xl border px-4 py-3 text-sm leading-relaxed transition-all ${color} ${isGen ? "animate-pulse" : ""}`}>
-          <div className="flex items-center justify-between mb-1">
+        <div className={`rounded-xl border px-4 py-3 text-sm leading-relaxed transition-all ${color} ${isGen ? "animate-pulse" : ""} ${zone === "stage" ? "border-dashed border-amber-800/60" : ""}`}>
+          <div className="flex items-center justify-between mb-1 cursor-grab active:cursor-grabbing">
             <span className="text-[10px] uppercase tracking-wider text-stone-500">
               {label}
               {f.timing && <span className="ml-2 text-stone-700">{f.timing.durationMs < 1000 ? `${f.timing.durationMs}ms` : `${(f.timing.durationMs / 1000).toFixed(1)}s`}</span>}
@@ -463,34 +600,41 @@ export default function WorkspaceCanvas({
               {!isInSequence && zone === "unplaced" && (
                 <button onClick={(e) => { e.stopPropagation(); onSelectFragment(f.id); }} className="text-[10px] px-1.5 py-0.5 bg-blue-900/50 text-blue-300 rounded hover:bg-blue-800/50">pick</button>
               )}
+              {zone !== "stage" && (
+                <button onClick={(e) => { e.stopPropagation(); onGenerate(f.id); }} className="text-[10px] px-1 text-blue-600 hover:text-blue-400 opacity-0 group-hover:opacity-100">extend</button>
+              )}
               {zone === "workspace" && (
                 <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "stage"); }} className="text-[10px] px-1 text-stone-600 hover:text-stone-400 opacity-0 group-hover:opacity-100">stage</button>
+              )}
+              {zone === "stage" && (
+                <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "workspace"); }} className="text-[10px] px-1 text-amber-600 hover:text-amber-400 opacity-0 group-hover:opacity-100">unstage</button>
               )}
             </div>
           </div>
           {isEditing ? (
-            <div onClick={(e) => e.stopPropagation()}>
+            <div className="relative" onClick={(e) => e.stopPropagation()}>
               <textarea value={editText} onChange={(e) => setEditText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Escape") setEditingId(null); if (e.key === "Enter" && e.metaKey) saveEdit(); }}
-                className="w-full bg-stone-900 border border-stone-600 rounded px-2 py-1 text-sm text-stone-200 focus:outline-none resize-y min-h-[60px]" rows={4} autoFocus />
-              <div className="flex gap-2 mt-1">
-                <button onClick={saveEdit} className="text-xs px-2 py-0.5 bg-stone-700 rounded text-stone-300 hover:bg-stone-600">Save</button>
-                <button onClick={() => setEditingId(null)} className="text-xs text-stone-600 hover:text-stone-400">Cancel</button>
-              </div>
+                onBlur={() => setEditingId(null)}
+                className="w-full bg-stone-900 border border-stone-600 rounded px-2 py-1 pr-8 text-sm text-stone-200 focus:outline-none resize-y min-h-[60px]" rows={4} autoFocus />
+              <button onMouseDown={(e) => { e.preventDefault(); saveEdit(); }}
+                className="absolute top-1.5 right-1.5 text-stone-500 hover:text-emerald-400 text-sm" title="Save (Cmd+Enter)">
+                &#x2713;
+              </button>
             </div>
           ) : isGen ? (
             <div className="text-stone-500">Generating...</div>
           ) : f.status === "error" ? (
             <div className="text-red-400 text-xs">Error: {f.error || "failed"}</div>
           ) : (
-            <div className="whitespace-pre-wrap select-text text-stone-200" onMouseUp={() => handleTextMouseUp(f.id, f.content)}>
+            <div data-text-content className="whitespace-pre-wrap select-text text-stone-200 cursor-text" onMouseUp={() => handleTextMouseUp(f.id, f.content)}>
               {f.content}
             </div>
           )}
         </div>
       </div>
     );
-  }, [positions, semanticZoom, cursorMode, editingId, editText, dragState, ws.sequence,
+  }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
       handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer]);
 
@@ -538,17 +682,9 @@ export default function WorkspaceCanvas({
 
   return (
     <div ref={viewportRef} className="w-full h-full relative overflow-hidden bg-stone-950">
-      {/* Toolbar */}
-      <div className="absolute top-3 left-3 z-40 flex gap-2 items-center">
-        <button onClick={() => setCursorMode("select")}
-          className={`text-xs px-2 py-1 rounded border transition-colors ${cursorMode === "select" ? "border-stone-500 text-stone-300 bg-stone-800" : "border-stone-700 text-stone-600 hover:text-stone-400"}`}>
-          I Select
-        </button>
-        <button onClick={() => setCursorMode("hand")}
-          className={`text-xs px-2 py-1 rounded border transition-colors ${cursorMode === "hand" ? "border-stone-500 text-stone-300 bg-stone-800" : "border-stone-700 text-stone-600 hover:text-stone-400"}`}>
-          ✋ Move
-        </button>
-        <span className="text-[10px] text-stone-600 ml-2">
+      {/* Zoom indicator */}
+      <div className="absolute top-3 left-3 z-40">
+        <span className="text-[10px] text-stone-600">
           zoom: {semanticZoom} ({(panZoom.zoom * 100).toFixed(0)}%)
         </span>
       </div>
@@ -560,7 +696,7 @@ export default function WorkspaceCanvas({
 
       {/* Pan/zoom canvas */}
       <div ref={containerRef} className="w-full h-full"
-        style={{ cursor: cursorMode === "hand" ? "grab" : "text" }}
+        style={{ cursor: "default" }}
         {...panZoomHandlers}>
         <div style={{
           transform: `translate(${panZoom.panX}px, ${panZoom.panY}px) scale(${panZoom.zoom})`,
@@ -580,10 +716,36 @@ export default function WorkspaceCanvas({
           {splitToolbar && semanticZoom === "full" && (
             <div className="absolute z-50 flex gap-1 bg-stone-800 border border-stone-600 rounded-lg shadow-xl px-1.5 py-1 -translate-x-1/2 -translate-y-full pointer-events-auto"
               style={{ left: splitToolbar.x, top: splitToolbar.y }}>
+              <button onMouseDown={(e) => {
+                e.preventDefault();
+                const frag = ws.fragments[splitToolbar.fragmentId];
+                if (frag) {
+                  const selectedText = frag.content.slice(splitToolbar.charStart, splitToolbar.charEnd);
+                  onReplace(splitToolbar.fragmentId, selectedText, frag.content);
+                }
+                setSplitToolbar(null); window.getSelection()?.removeAllRanges(); onRefresh();
+              }}
+                className="text-xs px-2 py-0.5 text-violet-300 hover:bg-violet-900/50 rounded">replace</button>
               <button onMouseDown={(e) => { e.preventDefault(); onSplitRange(splitToolbar.fragmentId, splitToolbar.charStart, splitToolbar.charEnd); setSplitToolbar(null); window.getSelection()?.removeAllRanges(); onRefresh(); }}
                 className="text-xs px-2 py-0.5 text-stone-300 hover:bg-stone-700 rounded">split</button>
-              <button onMouseDown={(e) => { e.preventDefault(); onZoneTransfer(splitToolbar.fragmentId, "stage"); setSplitToolbar(null); window.getSelection()?.removeAllRanges(); onRefresh(); }}
-                className="text-xs px-2 py-0.5 text-stone-300 hover:bg-stone-700 rounded">stage</button>
+            </div>
+          )}
+
+          {/* Stage zone indicator */}
+          {(stageFragments.length > 0 || unplacedFragments.length > 0) && (
+            <div
+              className="absolute border border-dashed border-amber-900/30 rounded-2xl pointer-events-none"
+              style={{
+                left: STAGE_X_OFFSET - 20,
+                top: 10,
+                width: nodeWidth + 40,
+                height: (stageFragments.length + unplacedFragments.length) * (nodeH + 20) + 40,
+                minHeight: 80,
+              }}
+            >
+              <span className="absolute -top-2.5 left-4 bg-stone-950 px-2 text-[10px] uppercase tracking-wider text-amber-800/60">
+                stage
+              </span>
             </div>
           )}
 
@@ -594,21 +756,23 @@ export default function WorkspaceCanvas({
               : "unplaced" as const;
             return renderFragment(f, zone);
           })}
+
+          {/* Merge spinner overlay */}
+          {mergeCandidate && positions[mergeCandidate.targetId] && (
+            <MergeSpinner
+              x={positions[mergeCandidate.targetId].x}
+              y={positions[mergeCandidate.targetId].y}
+              nodeWidth={nodeWidth}
+              nodeHeight={nodeH}
+              startedAt={mergeCandidate.startedAt}
+              durationMs={2000}
+              mergeType={mergeCandidate.mergeType}
+              confirmed={mergeCandidate.confirmed}
+            />
+          )}
         </div>
       </div>
 
-      {/* Input bar */}
-      <div className="absolute bottom-0 left-0 right-0 bg-stone-900/90 border-t border-stone-800 p-3 flex gap-2">
-        <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
-          placeholder="Type a message..."
-          className="flex-1 bg-stone-800 border border-stone-700 rounded px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500" />
-        <button onClick={handleSend} disabled={!inputText.trim() || isGenerating}
-          className="px-4 py-2 text-sm bg-stone-700 rounded text-stone-300 hover:bg-stone-600 disabled:opacity-30">Send</button>
-        <button onClick={onGenerate} disabled={isGenerating}
-          className="px-3 py-2 text-xs border border-stone-700 rounded text-stone-500 hover:text-stone-300 disabled:opacity-30">
-          {isGenerating ? "generating..." : "↻ reroll"}</button>
-      </div>
     </div>
   );
 }
