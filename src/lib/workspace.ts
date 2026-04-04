@@ -386,6 +386,22 @@ export function splitFragment(
     });
   }
 
+  // Chain split children with responded-to edges so layout engines order them
+  for (let i = 0; i < resultIds.length - 1; i++) {
+    addEdge(ws, resultIds[i], resultIds[i + 1], "responded-to");
+  }
+
+  // Reconnect: if parent had a responded-to predecessor, link it to first child
+  // and if parent had a responded-to successor, link last child to it
+  for (const edge of ws.edges) {
+    if (edge.type === "responded-to" && edge.to === fragmentId) {
+      addEdge(ws, edge.from, resultIds[0], "responded-to");
+    }
+    if (edge.type === "responded-to" && edge.from === fragmentId) {
+      addEdge(ws, resultIds[resultIds.length - 1], edge.to, "responded-to");
+    }
+  }
+
   // Mark original as consumed — keep for lineage but hide from all views
   original.status = "pending"; // reuse "pending" as "consumed/hidden"
   original.content = `[split into ${resultIds.length} fragments]`;
