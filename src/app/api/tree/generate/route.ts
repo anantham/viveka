@@ -72,10 +72,28 @@ export async function POST(req: NextRequest) {
   };
   const systemPrompt = buildSystemPrompt(stubSession);
   const model = ws.settings.model || process.env.VIVEKA_MODEL || "sonnet";
-  const promptMessage = parentFrag.provenance.type === "human-typed" ? parentFrag.content : "";
+  const isAssistantFragment = parentFrag.provenance.type === "ai-generated";
+  const isLastSequenceFragment = ws.sequence[ws.sequence.length - 1] === actualParentId;
 
-  const historyTokenEst = history.reduce((s, h) => s + h.content.length, 0);
-  console.log(`[generate] firing ${n} parallel completions | model=${model} | history=${history.length} msgs (~${historyTokenEst} chars) | prompt="${promptMessage.slice(0, 80)}..."`);
+  let promptMessage = parentFrag.content;
+  let modelHistory = history;
+
+  if (isLastSequenceFragment && !isAssistantFragment) {
+    // Preserve the normal chat flow when the selected fragment is the latest user-side turn.
+    promptMessage = parentFrag.content;
+    modelHistory = history.slice(0, -1);
+  } else if (isLastSequenceFragment && isAssistantFragment) {
+    // When extending the latest assistant fragment, keep it in history and ask for a direct continuation.
+    promptMessage = "Continue directly from the assistant fragment above. Do not restart or answer a new user turn.";
+  } else {
+    const task = isAssistantFragment
+      ? "Continue and elaborate the selected fragment using the current workspace context."
+      : "Respond to or continue from the selected fragment using the current workspace context.";
+    promptMessage = `${task}\n\nSelected fragment:\n${parentFrag.content}`;
+  }
+
+  const historyTokenEst = modelHistory.reduce((s, h) => s + h.content.length, 0);
+  console.log(`[generate] firing ${n} parallel completions | model=${model} | history=${modelHistory.length} msgs (~${historyTokenEst} chars) | prompt="${promptMessage.slice(0, 80)}..."`);
 
   // Fire N parallel completions (don't await)
   Promise.all(
@@ -87,7 +105,7 @@ export async function POST(req: NextRequest) {
         const response = await queryClaudeCode(
           promptMessage,
           systemPrompt,
-          history.slice(0, -1),
+          modelHistory,
           { model, noTools: true }
         );
 

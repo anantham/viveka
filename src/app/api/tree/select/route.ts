@@ -15,6 +15,10 @@ export async function POST(req: NextRequest) {
 
   // If already in sequence, nothing to do
   if (ws.sequence.includes(nodeId)) {
+    if (ws.stageIds.includes(nodeId)) {
+      ws.stageIds = ws.stageIds.filter((id) => id !== nodeId);
+      saveWorkspace(ws);
+    }
     return NextResponse.json({ sequence: ws.sequence });
   }
 
@@ -24,6 +28,8 @@ export async function POST(req: NextRequest) {
 
   // Find which sibling is currently in the sequence
   const currentSibInSeq = ws.sequence.findIndex((id) => siblingIds.includes(id));
+
+  ws.stageIds = ws.stageIds.filter((id) => id !== nodeId);
 
   if (currentSibInSeq !== -1) {
     // Swap: replace the current sibling with the selected one
