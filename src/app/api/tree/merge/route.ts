@@ -53,6 +53,8 @@ export async function POST(req: NextRequest) {
   if (!sourceFrag || !targetFrag) {
     return NextResponse.json({ error: "Fragment not found" }, { status: 404 });
   }
+  const sourceContent = sourceFrag.content;
+  const targetContent = targetFrag.content;
 
   // Create pending merged fragment
   const mergedFrag = addFragment(ws, "", {
@@ -65,29 +67,41 @@ export async function POST(req: NextRequest) {
   addEdge(ws, targetId, mergedFrag.id, "derived");
 
   const targetInSequence = ws.sequence.includes(targetId);
+  const targetInStage = ws.stageIds.includes(targetId);
+  const sourceInSequence = ws.sequence.includes(sourceId);
+  const sourceInStage = ws.stageIds.includes(sourceId);
+
   const nextSequence: string[] = [];
   for (const id of ws.sequence) {
-    if (id === sourceId) continue;
     if (id === targetId) {
       nextSequence.push(mergedFrag.id);
+      continue;
+    }
+    if (id === sourceId) {
+      if (!targetInSequence && !targetInStage && sourceInSequence) {
+        nextSequence.push(mergedFrag.id);
+      }
       continue;
     }
     nextSequence.push(id);
   }
 
-  let targetInStage = false;
   const nextStageIds: string[] = [];
   for (const id of ws.stageIds) {
-    if (id === sourceId) continue;
     if (id === targetId) {
-      targetInStage = true;
       nextStageIds.push(mergedFrag.id);
+      continue;
+    }
+    if (id === sourceId) {
+      if (!targetInSequence && !targetInStage && sourceInStage) {
+        nextStageIds.push(mergedFrag.id);
+      }
       continue;
     }
     nextStageIds.push(id);
   }
 
-  if (!targetInSequence && !targetInStage) {
+  if (!targetInSequence && !targetInStage && !sourceInSequence && !sourceInStage) {
     nextSequence.push(mergedFrag.id);
   }
 
@@ -97,15 +111,17 @@ export async function POST(req: NextRequest) {
   // Inherit target's canvas position
   if (ws.canvasPositions[targetId]) {
     ws.canvasPositions[mergedFrag.id] = { ...ws.canvasPositions[targetId] };
+  } else if (ws.canvasPositions[sourceId]) {
+    ws.canvasPositions[mergedFrag.id] = { ...ws.canvasPositions[sourceId] };
   }
   delete ws.canvasPositions[sourceId];
   delete ws.canvasPositions[targetId];
 
-  // Hide consumed source fragments while keeping lineage through derived edges.
+  // Hide both input fragments after the merge while keeping lineage via derived edges.
   sourceFrag.status = "pending";
-  sourceFrag.content = "[merged into fragment]";
+  sourceFrag.content = `[merged into ${mergedFrag.id}]`;
   targetFrag.status = "pending";
-  targetFrag.content = "[merged into fragment]";
+  targetFrag.content = `[merged into ${mergedFrag.id}]`;
 
   // Log operation
   ws.opLog.push({
@@ -120,7 +136,7 @@ export async function POST(req: NextRequest) {
   // Fire LLM call (don't await)
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
-  const prompt = buildMergePrompt(sourceFrag.content, targetFrag.content, mergeType);
+  const prompt = buildMergePrompt(sourceContent, targetContent, mergeType);
 
   queryClaudeCode(prompt, MERGE_SYSTEM_PROMPT, [], { noTools: true })
     .then((response) => {
