@@ -64,22 +64,48 @@ export async function POST(req: NextRequest) {
   addEdge(ws, sourceId, mergedFrag.id, "derived");
   addEdge(ws, targetId, mergedFrag.id, "derived");
 
-  // Replace target in sequence with merged; remove source from sequence
-  const targetIdx = ws.sequence.indexOf(targetId);
-  if (targetIdx !== -1) {
-    ws.sequence[targetIdx] = mergedFrag.id;
-  } else {
-    ws.sequence.push(mergedFrag.id);
+  const targetInSequence = ws.sequence.includes(targetId);
+  const nextSequence: string[] = [];
+  for (const id of ws.sequence) {
+    if (id === sourceId) continue;
+    if (id === targetId) {
+      nextSequence.push(mergedFrag.id);
+      continue;
+    }
+    nextSequence.push(id);
   }
-  ws.sequence = ws.sequence.filter((id) => id !== sourceId);
 
-  // Remove source from stageIds if present
-  ws.stageIds = ws.stageIds.filter((id) => id !== sourceId);
+  let targetInStage = false;
+  const nextStageIds: string[] = [];
+  for (const id of ws.stageIds) {
+    if (id === sourceId) continue;
+    if (id === targetId) {
+      targetInStage = true;
+      nextStageIds.push(mergedFrag.id);
+      continue;
+    }
+    nextStageIds.push(id);
+  }
+
+  if (!targetInSequence && !targetInStage) {
+    nextSequence.push(mergedFrag.id);
+  }
+
+  ws.sequence = nextSequence;
+  ws.stageIds = nextStageIds;
 
   // Inherit target's canvas position
   if (ws.canvasPositions[targetId]) {
     ws.canvasPositions[mergedFrag.id] = { ...ws.canvasPositions[targetId] };
   }
+  delete ws.canvasPositions[sourceId];
+  delete ws.canvasPositions[targetId];
+
+  // Hide consumed source fragments while keeping lineage through derived edges.
+  sourceFrag.status = "pending";
+  sourceFrag.content = "[merged into fragment]";
+  targetFrag.status = "pending";
+  targetFrag.content = "[merged into fragment]";
 
   // Log operation
   ws.opLog.push({
