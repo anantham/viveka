@@ -371,6 +371,26 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     await refreshTree();
   };
 
+  const handleExtend = async (parentFragmentId: string) => {
+    console.log(`[viveka-ui] extend from fragment ${parentFragmentId.slice(0, 8)}`);
+    await fetch("/api/tree/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ treeId: tree.id, parentId: parentFragmentId }),
+    });
+    await refreshTree();
+  };
+
+  const handleReplace = async (fragmentId: string, selectedText: string, fullContent: string) => {
+    console.log(`[viveka-ui] replace phrase in fragment ${fragmentId.slice(0, 8)}: "${selectedText.slice(0, 40)}..."`);
+    await fetch("/api/tree/reroll-phrase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ treeId: tree.id, nodeId: fragmentId, selectedText, fullContent }),
+    });
+    await refreshTree();
+  };
+
   const handleDraft = async () => {
     if (!lastNode) return;
     const parentId = lastNode.role === "assistant" ? lastNode.id : lastNode.parentId;
@@ -538,7 +558,8 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           onMoveFragment={handleMoveFragment}
           onZoneTransfer={handleZoneTransfer}
           onEdit={handleEdit}
-          onGenerate={handleReroll}
+          onGenerate={handleExtend}
+          onReplace={handleReplace}
           onSubmitMessage={sendUserMessage}
           onSelectFragment={async (fragId) => {
             await fetch("/api/tree/zone", {
@@ -555,7 +576,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           onClick={() => setFullscreen(false)}
           className="absolute top-3 right-3 z-50 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200 hover:bg-stone-700"
         >
-          exit fullscreen
+          ⤡
         </button>
       </div>
     );
@@ -677,7 +698,8 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onMoveFragment={handleMoveFragment}
               onZoneTransfer={handleZoneTransfer}
               onEdit={handleEdit}
-              onGenerate={handleReroll}
+              onGenerate={handleExtend}
+              onReplace={handleReplace}
               onSubmitMessage={sendUserMessage}
               onSelectFragment={async (fragId) => {
                 // Add unplaced fragment to sequence
@@ -695,7 +717,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onClick={() => setFullscreen(true)}
               className="absolute bottom-16 right-3 z-40 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200"
             >
-              fullscreen
+              ⤢
             </button>
           </div>
         )}
