@@ -61,6 +61,21 @@ function getNodeWidth(sz: SemanticZoom): number {
   }
 }
 
+// Estimate the rendered height of a fragment so dagre + physics give it
+// enough vertical room. Without this, every fragment is treated as 80px
+// tall and 10-line AI completions overlap their neighbors. The estimator
+// is content-length driven — cheaper than DOM measurement and good enough
+// for layout (real heights settle in once physics has run a frame or two).
+function estimateFragmentHeight(content: string, sz: SemanticZoom): number {
+  if (sz === "dot") return 24;
+  if (sz === "compact") return 44;
+  if (sz === "summary") return 96;
+  // FULL: ~60 chars per line at NODE_WIDTH_FULL, 23px line-height, +40 chrome
+  const len = content?.length ?? 0;
+  const lines = Math.max(2, Math.ceil(len / 60));
+  return Math.min(640, lines * 23 + 40);
+}
+
 // ---------------------------------------------------------------------------
 // Content rendering helpers
 // ---------------------------------------------------------------------------
@@ -98,6 +113,35 @@ function provenanceColor(f: Fragment): string {
     case "system": return "border-stone-700/50 bg-stone-900/80";
     default: return "border-stone-700/50 bg-stone-800/80";
   }
+}
+
+// Bare left-edge stripe — the only persistent provenance cue when the
+// fragment is at rest. Two pixels of color, the rest of the surface stays
+// transparent so the text can "float" on the canvas. Hover state (handled
+// elsewhere) adds back the toolbar and any background tint.
+function provenanceStripe(f: Fragment): string {
+  switch (f.provenance.type) {
+    case "ai-generated": return "border-l-2 border-l-blue-500/60";
+    case "human-typed": return "border-l-2 border-l-emerald-500/70";
+    case "split": case "extracted": return "border-l-2 border-l-violet-500/60";
+    case "imported": return "border-l-2 border-l-amber-500/60";
+    case "derived": return "border-l-2 border-l-teal-500/60";
+    case "system": return "border-l-2 border-l-stone-500/40";
+    default: return "border-l-2 border-l-stone-500/40";
+  }
+}
+
+// Per-model warmth tinting on top of provenanceStripe — subtle so it doesn't
+// shout, but distinct enough to read at a glance which model wrote what.
+// Only applied when provenance.type === "ai-generated".
+function modelTextColor(f: Fragment): string {
+  if (f.provenance.type !== "ai-generated") return "text-stone-200";
+  const model = (f.provenance.model || "").toLowerCase();
+  if (model.includes("sonnet") || model.includes("opus")) return "text-amber-50/95";
+  if (model.includes("haiku")) return "text-cyan-50/95";
+  if (model.includes("gemini") || model.includes("flash")) return "text-emerald-50/95";
+  if (model.includes("llama")) return "text-violet-50/95";
+  return "text-stone-200";
 }
 
 function provenanceDotColor(f: Fragment): string {
@@ -139,16 +183,19 @@ function computeDagreLayout(
   fragments: Fragment[],
   edges: Edge[],
   nodeWidth: number,
-  nodeHeight: number,
+  heightFor: (f: Fragment) => number,
   direction: "TB" | "LR" = "TB"
 ): Record<string, Position> {
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: direction, nodesep: 40, ranksep: 60, marginx: 40, marginy: 40 });
+  g.setGraph({ rankdir: direction, nodesep: 60, ranksep: 80, marginx: 40, marginy: 40 });
   g.setDefaultEdgeLabel(() => ({}));
 
   const fragIds = new Set(fragments.map((f) => f.id));
+  const heightCache: Record<string, number> = {};
   for (const f of fragments) {
-    g.setNode(f.id, { width: nodeWidth, height: nodeHeight });
+    const h = heightFor(f);
+    heightCache[f.id] = h;
+    g.setNode(f.id, { width: nodeWidth, height: h });
   }
   for (const e of edges) {
     if (fragIds.has(e.from) && fragIds.has(e.to)) {
@@ -161,8 +208,9 @@ function computeDagreLayout(
   const positions: Record<string, Position> = {};
   for (const f of fragments) {
     const node = g.node(f.id);
+    const h = heightCache[f.id];
     if (node) {
-      positions[f.id] = { x: node.x - nodeWidth / 2, y: node.y - nodeHeight / 2 };
+      positions[f.id] = { x: node.x - nodeWidth / 2, y: node.y - h / 2 };
     }
   }
   return positions;
@@ -274,10 +322,13 @@ export default function WorkspaceCanvas({
     return groups;
   }, [ws.edges]);
 
-  // All visible fragments for layout
+  // All visible fragments for layout. Per the phase-transition vision,
+  // canvas shows ONE traversal of the tree — sequence + stage + active
+  // generations. Sibling alternatives (unplacedFragments) are hidden here;
+  // they live in tree view and surface ephemerally during inline reroll.
   const allVisible = useMemo(
-    () => [...sequenceFragments, ...stageFragments, ...unplacedFragments, ...generatingFragments],
-    [sequenceFragments, stageFragments, unplacedFragments, generatingFragments]
+    () => [...sequenceFragments, ...stageFragments, ...generatingFragments],
+    [sequenceFragments, stageFragments, generatingFragments]
   );
 
   // Visible edges
@@ -290,24 +341,33 @@ export default function WorkspaceCanvas({
   // Layout: dagre for sequence, offset for stage/unplaced
   // -----------------------------------------------------------------------
 
-  const nodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 40 : 80;
+  // Fallback height used by edge geometry and a few other callsites that
+  // still want a single number. Per-fragment height (for layout + physics)
+  // goes through estimateFragmentHeight.
+  const nodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 44 : 96;
+  const heightFor = useCallback(
+    (f: Fragment) => estimateFragmentHeight(f.content, semanticZoom),
+    [semanticZoom]
+  );
 
   const basePositions = useMemo(() => {
-    // Dagre layout for sequence fragments
+    // Dagre layout for sequence fragments — per-fragment heights so tall
+    // completions get the vertical room they need.
     const seqEdges = ws.edges.filter((e) => {
       const seqSet = new Set(ws.sequence);
       return seqSet.has(e.from) && seqSet.has(e.to);
     });
-    const dagrePos = computeDagreLayout(
-      sequenceFragments, seqEdges, nodeWidth, nodeH
-    );
+    const dagrePos = computeDagreLayout(sequenceFragments, seqEdges, nodeWidth, heightFor);
 
-    // Stage + unplaced: vertical column to the right
+    // Stage: vertical column to the right, each fragment getting its own
+    // estimated height + breathing room. Unplaced (sibling alternatives)
+    // are no longer rendered on canvas, so the stage column stays sparse.
     let stageY = 40;
     const stagePos: Record<string, Position> = {};
-    for (const f of [...stageFragments, ...unplacedFragments]) {
+    for (const f of stageFragments) {
+      const h = heightFor(f);
       stagePos[f.id] = { x: STAGE_X_OFFSET, y: stageY };
-      stageY += nodeH + 20;
+      stageY += h + 20;
     }
 
     // Generating: below sequence
@@ -319,14 +379,20 @@ export default function WorkspaceCanvas({
     }
 
     return { ...dagrePos, ...stagePos, ...genPos };
-  }, [sequenceFragments, stageFragments, unplacedFragments, generatingFragments,
-      ws.edges, ws.sequence, semanticZoom, nodeWidth, nodeH]);
+  }, [sequenceFragments, stageFragments, generatingFragments,
+      ws.edges, ws.sequence, nodeWidth, nodeH, heightFor]);
 
   // -----------------------------------------------------------------------
   // Physics simulation
   // -----------------------------------------------------------------------
 
-  const physicsNodeSize = useCallback((id: string) => ({ w: nodeWidth, h: nodeH }), [nodeWidth, nodeH]);
+  const physicsNodeSize = useCallback(
+    (id: string) => {
+      const f = ws.fragments[id];
+      return { w: nodeWidth, h: f ? heightFor(f) : nodeH };
+    },
+    [nodeWidth, nodeH, ws.fragments, heightFor]
+  );
 
   const { physicsPositions, physicsPositionsRef, inject, wake, killNode, isAwake, pinRestPosition } = usePhysicsSimulation({
     nodeIds: useMemo(() => allVisible.map((f) => f.id), [allVisible]),
@@ -373,20 +439,21 @@ export default function WorkspaceCanvas({
   // -----------------------------------------------------------------------
 
   const contentBbox = useMemo(() => {
-    const ids = allVisible.map((f) => f.id).filter((id) => positions[id]);
-    if (ids.length === 0) return null;
+    const visible = allVisible.filter((f) => positions[f.id]);
+    if (visible.length === 0) return null;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const id of ids) {
-      const p = positions[id];
+    for (const f of visible) {
+      const p = positions[f.id];
       if (!p) continue;
+      const h = heightFor(f);
       minX = Math.min(minX, p.x);
       minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x + nodeWidth);
-      maxY = Math.max(maxY, p.y + nodeH);
+      maxY = Math.max(maxY, p.y + h);
     }
     if (!isFinite(minX)) return null;
     return { minX, minY, maxX, maxY };
-  }, [allVisible, positions, nodeWidth, nodeH]);
+  }, [allVisible, positions, nodeWidth, heightFor]);
 
   // -----------------------------------------------------------------------
   // Auto-fit on workspace open
@@ -597,26 +664,26 @@ export default function WorkspaceCanvas({
       );
     }
 
-    // COMPACT level — single line, big font
+    // COMPACT level — single line, provenance stripe only
     if (semanticZoom === "compact") {
       return (
         <div
           key={f.id}
-          className={`absolute rounded-lg border px-2 py-1 transition-all ${color}`}
+          className={`absolute pl-2 pr-1 py-1 transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
           style={{ left: pos.x, top: pos.y, width: NODE_WIDTH_COMPACT, opacity: zone === "unplaced" ? 0.4 : 1 }}
           onPointerDown={(e) => handlePointerDown(e, f.id)}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
-          <div className="text-xs font-medium text-stone-200 truncate">
+          <div className={`text-xs font-medium truncate ${modelTextColor(f)}`}>
             {getFirstLine(f.content)}
           </div>
-          <div className="text-[9px] text-stone-600 mt-0.5">{label}</div>
+          <div className="text-[9px] text-stone-600 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">{label}</div>
         </div>
       );
     }
 
-    // SUMMARY level — first line (bright), summary (dim), last line (bright)
+    // SUMMARY level — provenance stripe + first/middle/last line preview
     if (semanticZoom === "summary") {
       const first = getFirstLine(f.content);
       const last = getLastLine(f.content);
@@ -624,71 +691,86 @@ export default function WorkspaceCanvas({
       return (
         <div
           key={f.id}
-          className={`absolute rounded-xl border px-3 py-2 transition-all ${color}`}
+          className={`absolute pl-3 pr-2 py-2 transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
           style={{ left: pos.x, top: pos.y, width: NODE_WIDTH_SUMMARY, opacity: zone === "unplaced" ? 0.5 : 1 }}
           onPointerDown={(e) => handlePointerDown(e, f.id)}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
-          <div className="text-[10px] text-stone-500 mb-1">{label} {isInSequence && `#${seqIndex + 1}`}</div>
-          <div className="text-sm font-medium text-stone-100 leading-snug">{first}</div>
+          <div className="text-[10px] text-stone-500 mb-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {label} {isInSequence && `·${seqIndex + 1}`}
+          </div>
+          <div className={`text-sm font-medium leading-snug ${modelTextColor(f)}`}>{first}</div>
           {summary && <div className="text-xs text-stone-500 leading-snug mt-1 italic">{summary}</div>}
-          {first !== last && <div className="text-sm font-medium text-stone-300 leading-snug mt-1">{last}</div>}
+          {first !== last && <div className={`text-sm leading-snug mt-1 ${modelTextColor(f)}`}>{last}</div>}
         </div>
       );
     }
 
-    // FULL level — complete text, editable, split toolbar
+    // FULL level — bare text on canvas, chrome only on hover
+    const stripe = provenanceStripe(f);
+    const textColor = modelTextColor(f);
+    const isStaged = zone === "stage";
+
     return (
       <div
         key={f.id}
-        className="absolute cursor-default group"
+        className={`absolute cursor-default group ${stripe} ${isStaged ? "border-l-amber-600/40 border-dashed" : ""}`}
         style={{
           left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
           zIndex: dragState?.fragmentId === f.id ? 50 : 1,
-          opacity: zone === "unplaced" ? 0.5 : zone === "stage" ? 0.7 : 1,
+          opacity: zone === "unplaced" ? 0.45 : isStaged ? 0.7 : 1,
         }}
         onPointerDown={(e) => handlePointerDown(e, f.id)}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onDoubleClick={() => startEdit(f)}
       >
-        <div className={`rounded-xl border px-4 py-3 text-sm leading-relaxed transition-all ${color} ${isGen ? "animate-pulse" : ""} ${zone === "stage" ? "border-dashed border-amber-800/60" : ""}`}>
-          <div className="flex items-center justify-between mb-1 cursor-grab active:cursor-grabbing">
-            <span className="text-[10px] uppercase tracking-wider text-stone-500">
-              {label}
-              {f.timing && <span className="ml-2 text-stone-700">{f.timing.durationMs < 1000 ? `${f.timing.durationMs}ms` : `${(f.timing.durationMs / 1000).toFixed(1)}s`}</span>}
-            </span>
-            <div className="flex items-center gap-2">
-              {siblings && siblings.length > 1 && <span className="text-[10px] text-stone-600">{siblings.indexOf(f.id) + 1}/{siblings.length}</span>}
-              {isInSequence && <span className="bg-stone-600 text-stone-200 text-[10px] font-mono rounded-full w-5 h-5 flex items-center justify-center">{seqIndex + 1}</span>}
-              {!isInSequence && zone === "unplaced" && (
-                <button onClick={(e) => { e.stopPropagation(); onSelectFragment(f.id); }} className="text-[10px] px-1.5 py-0.5 bg-blue-900/50 text-blue-300 rounded hover:bg-blue-800/50">pick</button>
-              )}
-              {zone !== "stage" && (
-                <button onClick={(e) => { e.stopPropagation(); onGenerate(f.id); }} className="text-[10px] px-1 text-blue-600 hover:text-blue-400 opacity-0 group-hover:opacity-100">extend</button>
-              )}
-              {zone === "workspace" && (
-                <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "stage"); }} className="text-[10px] px-1 text-stone-600 hover:text-stone-400 opacity-0 group-hover:opacity-100">stage</button>
-              )}
-              {zone === "stage" && (
-                <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "workspace"); }} className="text-[10px] px-1 text-amber-600 hover:text-amber-400 opacity-0 group-hover:opacity-100">unstage</button>
-              )}
-            </div>
+        {/* Hover toolbar: chrome lives here, hidden until hover. Positioned
+            above the text so it doesn't displace the layout. */}
+        <div className="absolute -top-6 left-2 right-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+          <span className="text-[10px] uppercase tracking-wider text-stone-500 pointer-events-none">
+            {label}
+            {f.timing && <span className="ml-2 text-stone-700">{f.timing.durationMs < 1000 ? `${f.timing.durationMs}ms` : `${(f.timing.durationMs / 1000).toFixed(1)}s`}</span>}
+          </span>
+          <div className="flex items-center gap-1.5 pointer-events-auto">
+            {siblings && siblings.length > 1 && (
+              <span className="text-[10px] text-stone-600">{siblings.indexOf(f.id) + 1}/{siblings.length}</span>
+            )}
+            {isInSequence && (
+              <span className="text-[10px] font-mono text-stone-600">·{seqIndex + 1}</span>
+            )}
+            {!isInSequence && zone === "unplaced" && (
+              <button onClick={(e) => { e.stopPropagation(); onSelectFragment(f.id); }} className="text-[10px] px-1.5 py-0.5 text-blue-300 hover:text-blue-100">pick</button>
+            )}
+            {zone !== "stage" && (
+              <button onClick={(e) => { e.stopPropagation(); onGenerate(f.id); }} className="text-[10px] px-1 text-blue-600 hover:text-blue-400">extend</button>
+            )}
+            {zone === "workspace" && (
+              <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "stage"); }} className="text-[10px] px-1 text-stone-600 hover:text-stone-400">stage</button>
+            )}
+            {zone === "stage" && (
+              <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "workspace"); }} className="text-[10px] px-1 text-amber-600 hover:text-amber-400">unstage</button>
+            )}
           </div>
+        </div>
+
+        <div
+          className={`pl-3 pr-3 py-2 text-[15px] leading-[1.55] transition-colors ${textColor} ${isGen ? "animate-pulse" : ""} group-hover:bg-stone-900/30 rounded-r`}
+        >
           {isEditing ? (
             <div className="relative" onClick={(e) => e.stopPropagation()}>
               <textarea value={editText} onChange={(e) => setEditText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Escape") setEditingId(null); if (e.key === "Enter" && e.metaKey) saveEdit(); }}
                 onBlur={() => setEditingId(null)}
-                className="w-full bg-stone-900 border border-stone-600 rounded px-2 py-1 pr-8 text-sm text-stone-200 focus:outline-none resize-y min-h-[60px]" rows={4} autoFocus />
+                className="w-full bg-stone-900 border border-stone-600 rounded px-2 py-1 pr-8 text-[15px] text-stone-200 focus:outline-none resize-y min-h-[60px]" rows={4} autoFocus />
               <button onMouseDown={(e) => { e.preventDefault(); saveEdit(); }}
                 className="absolute top-1.5 right-1.5 text-stone-500 hover:text-emerald-400 text-sm" title="Save (Cmd+Enter)">
                 &#x2713;
               </button>
             </div>
           ) : isGen ? (
-            <div className="text-stone-500">Generating...</div>
+            <div className="text-stone-500 italic">generating…</div>
           ) : f.status === "error" ? (
             <div className="text-red-400 text-xs">Error: {f.error || "failed"}</div>
           ) : enableWordLevel ? (
@@ -697,10 +779,15 @@ export default function WorkspaceCanvas({
               onContentChange={(newContent) => {
                 onEdit(f.id, newContent);
               }}
-              containerWidth={NODE_WIDTH_FULL - 32} // Account for padding
+              containerWidth={NODE_WIDTH_FULL - 24}
             />
           ) : (
-            <div data-text-content className="whitespace-pre-wrap select-text text-stone-200 cursor-text" onMouseUp={() => handleTextMouseUp(f.id, f.content)}>
+            <div
+              data-text-content
+              className="whitespace-pre-wrap select-text cursor-text"
+              style={{ textWrap: "pretty" } as React.CSSProperties}
+              onMouseUp={() => handleTextMouseUp(f.id, f.content)}
+            >
               {f.content}
             </div>
           )}
@@ -709,7 +796,7 @@ export default function WorkspaceCanvas({
     );
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
-      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit]);
+      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit, onGenerate]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
@@ -768,7 +855,7 @@ export default function WorkspaceCanvas({
           <button
             onClick={fitNow}
             className="text-[10px] px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 transition-colors"
-            title="Center and zoom-fit all content (F)"
+            title="Center and zoom-fit all content"
           >
             fit
           </button>
@@ -780,8 +867,10 @@ export default function WorkspaceCanvas({
             re-layout
           </button>
         </div>
-        <div className="text-[10px] text-stone-700">
-          {sequenceFragments.length} workspace · {stageFragments.length} staged · {unplacedFragments.length} unplaced · {generatingFragments.length} gen
+        <div className="text-[10px] text-stone-700" title="Sibling alternatives are hidden on canvas — see tree view to browse them">
+          {sequenceFragments.length} active · {stageFragments.length} staged
+          {unplacedFragments.length > 0 && <span className="text-stone-800"> · {unplacedFragments.length} alts hidden</span>}
+          {generatingFragments.length > 0 && <span className="text-blue-700"> · {generatingFragments.length} gen</span>}
         </div>
       </div>
 
@@ -830,7 +919,9 @@ export default function WorkspaceCanvas({
                 left: STAGE_X_OFFSET - 20,
                 top: 10,
                 width: nodeWidth + 40,
-                height: (stageFragments.length + unplacedFragments.length) * (nodeH + 20) + 40,
+                height: [...stageFragments, ...unplacedFragments].reduce(
+                  (acc, f) => acc + heightFor(f) + 20, 40
+                ),
                 minHeight: 80,
               }}
             >
