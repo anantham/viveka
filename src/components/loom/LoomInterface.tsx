@@ -373,12 +373,41 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     await refreshTree();
   };
 
-  const handleExtend = async (parentFragmentId: string) => {
-    console.log(`[viveka-ui] extend from fragment ${parentFragmentId.slice(0, 8)}`);
-    await fetch("/api/tree/generate", {
+  // Ephemeral extend: ask for N candidate continuations, return them as
+  // strings without creating any fragments. The canvas renders them
+  // inline as ghost continuations; commit happens via handleCommitExtend.
+  const handleExtend = async (
+    parentFragmentId: string
+  ): Promise<{ alternatives: string[] } | null> => {
+    const t0 = performance.now();
+    console.log(`[viveka-ui] extend ephemeral from fragment ${parentFragmentId.slice(0, 8)}`);
+    try {
+      const res = await fetch("/api/tree/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          treeId: tree.id, parentId: parentFragmentId,
+          ephemeral: true,
+          count: 3,
+        }),
+      });
+      const data = await res.json();
+      console.log(`[viveka-ui] extend returned in ${(performance.now() - t0).toFixed(0)}ms — ${data.alternatives?.length ?? 0} continuations`);
+      return { alternatives: data.alternatives ?? [] };
+    } catch (err) {
+      console.error("[viveka-ui] extend failed:", err);
+      return null;
+    }
+  };
+
+  // Commit the chosen continuation as a single new child fragment.
+  // No siblings are created — only the selected one persists.
+  const handleCommitExtend = async (parentFragmentId: string, content: string) => {
+    console.log(`[viveka-ui] commit extend under ${parentFragmentId.slice(0, 8)} (${content.length} chars)`);
+    await fetch("/api/tree/append-child", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ treeId: tree.id, parentId: parentFragmentId }),
+      body: JSON.stringify({ treeId: tree.id, parentId: parentFragmentId, content }),
     });
     await refreshTree();
   };
@@ -594,6 +623,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           onGenerate={handleExtend}
           onReplace={handleReplace}
           onCommitPhraseEdit={handleCommitPhraseEdit}
+          onCommitExtend={handleCommitExtend}
           onSubmitMessage={sendUserMessage}
           onSelectFragment={async (fragId) => {
             await fetch("/api/tree/zone", {
@@ -748,6 +778,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onGenerate={handleExtend}
               onReplace={handleReplace}
               onCommitPhraseEdit={handleCommitPhraseEdit}
+              onCommitExtend={handleCommitExtend}
               onSubmitMessage={sendUserMessage}
               onSelectFragment={async (fragId) => {
                 // Add unplaced fragment to sequence

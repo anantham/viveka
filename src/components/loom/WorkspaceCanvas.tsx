@@ -26,7 +26,8 @@ interface WorkspaceCanvasProps {
   onMoveFragment: (fragmentId: string, toIndex: number) => void;
   onZoneTransfer: (fragmentId: string, toZone: string) => void;
   onEdit: (fragmentId: string, content: string) => void;
-  onGenerate: (parentFragmentId: string) => void;
+  onGenerate: (parentFragmentId: string) => Promise<{ alternatives: string[] } | null> | void;
+  onCommitExtend?: (parentFragmentId: string, content: string) => Promise<void> | void;
   onReplace: (
     fragmentId: string,
     selectedText: string,
@@ -284,6 +285,7 @@ export default function WorkspaceCanvas({
   onGenerate,
   onReplace,
   onCommitPhraseEdit,
+  onCommitExtend,
   onSubmitMessage,
   onSelectFragment,
   onRefresh,
@@ -311,29 +313,42 @@ export default function WorkspaceCanvas({
     confirmed: boolean;
   } | null>(null);
 
-  // Inline phrase reroll state. When the user clicks "replace" on a
-  // selected span, we don't create new nodes. We:
-  //   1. Show a tiny badge above the source fragment with a live
-  //      countdown while the API call is in flight.
-  //   2. Once alternatives arrive, render them IN PLACE — the
-  //      source fragment's text shows the original prefix, then a
-  //      highlighted span where the original phrase used to be (now
-  //      showing the current alternative), then the suffix. Arrow
-  //      keys cycle through alternatives + the original; Enter
-  //      commits as an in-place edit; Esc dismisses with no change.
-  const [inlineAlts, setInlineAlts] = useState<{
-    sourceFragmentId: string;
-    selectedText: string;
-    charStart: number;
-    charEnd: number;
-    state: "pending" | "preview" | "committing";
-    alternatives: string[];   // populated after API returns
-    currentIdx: number;        // 0..N-1 — the alternative currently substituted
-    startedAt: number;
-  } | null>(null);
+  // Inline alternatives state — used by both "replace" (in-place phrase
+  // swap) and "extend" (in-place continuation preview). Shared shape for
+  // shared keyboard / badge logic; mode field discriminates the rendering
+  // and the commit action.
+  //
+  // replace: user selects text + clicks replace. Source fragment renders
+  //   with prefix + highlighted-alternative + suffix. Commit edits the
+  //   source fragment's content in place; no new nodes.
+  // extend: user clicks extend on hover toolbar. Source fragment renders
+  //   normally; a ghost continuation is appended after it. Commit appends
+  //   exactly ONE new child fragment with the chosen content; the other
+  //   alternatives never persist.
+  type InlineAltsState =
+    | {
+        mode: "replace";
+        sourceFragmentId: string;
+        selectedText: string;
+        charStart: number;
+        charEnd: number;
+        state: "pending" | "preview" | "committing";
+        alternatives: string[];
+        currentIdx: number;
+        startedAt: number;
+      }
+    | {
+        mode: "extend";
+        sourceFragmentId: string;
+        state: "pending" | "preview" | "committing";
+        alternatives: string[];
+        currentIdx: number;
+        startedAt: number;
+      };
+  const [inlineAlts, setInlineAlts] = useState<InlineAltsState | null>(null);
 
-  // Keyboard shortcuts during the in-place phrase reroll preview.
-  // Arrows cycle through alternatives, Enter commits, Esc reverts.
+  // Keyboard shortcuts during an inline-alternatives preview (replace OR
+  // extend). Arrows cycle, Enter commits per-mode, Esc dismisses.
   useEffect(() => {
     if (!inlineAlts || inlineAlts.state !== "preview") return;
     const handler = (e: KeyboardEvent) => {
@@ -349,13 +364,23 @@ export default function WorkspaceCanvas({
         e.preventDefault();
         const ia = inlineAlts;
         const alt = ia.alternatives[ia.currentIdx];
-        const frag = ws.fragments[ia.sourceFragmentId];
-        if (!alt || !frag || !onCommitPhraseEdit) return;
-        const newContent = frag.content.slice(0, ia.charStart) + alt + frag.content.slice(ia.charEnd);
-        setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
-        Promise.resolve(onCommitPhraseEdit(ia.sourceFragmentId, newContent)).finally(() => {
-          setInlineAlts(null);
-        });
+        if (!alt) return;
+        if (ia.mode === "replace") {
+          const frag = ws.fragments[ia.sourceFragmentId];
+          if (!frag || !onCommitPhraseEdit) return;
+          const newContent = frag.content.slice(0, ia.charStart) + alt + frag.content.slice(ia.charEnd);
+          setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
+          Promise.resolve(onCommitPhraseEdit(ia.sourceFragmentId, newContent)).finally(() => {
+            setInlineAlts(null);
+          });
+        } else {
+          // extend mode — append a new child fragment under the source
+          if (!onCommitExtend) return;
+          setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
+          Promise.resolve(onCommitExtend(ia.sourceFragmentId, alt)).finally(() => {
+            setInlineAlts(null);
+          });
+        }
       } else if (e.key === "Escape") {
         e.preventDefault();
         setInlineAlts(null);
@@ -363,7 +388,7 @@ export default function WorkspaceCanvas({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [inlineAlts, onCommitPhraseEdit, ws.fragments]);
+  }, [inlineAlts, onCommitPhraseEdit, onCommitExtend, ws.fragments]);
 
   // Velocity tracking for physics injection on drag release
   const lastDragPosRef = useRef<Position | null>(null);
@@ -973,7 +998,31 @@ export default function WorkspaceCanvas({
               <button onClick={(e) => { e.stopPropagation(); onSelectFragment(f.id); }} className="text-[10px] px-1.5 py-0.5 text-blue-300 hover:text-blue-100">pick</button>
             )}
             {zone !== "stage" && (
-              <button onClick={(e) => { e.stopPropagation(); onGenerate(f.id); }} className="text-[10px] px-1 text-blue-600 hover:text-blue-400">extend</button>
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  const sourceId = f.id;
+                  setInlineAlts({
+                    mode: "extend",
+                    sourceFragmentId: sourceId,
+                    state: "pending",
+                    alternatives: [],
+                    currentIdx: 0,
+                    startedAt: Date.now(),
+                  });
+                  const result = await onGenerate(sourceId);
+                  if (result && result.alternatives.length > 0) {
+                    setInlineAlts((prev) => prev && prev.mode === "extend" && prev.sourceFragmentId === sourceId
+                      ? { ...prev, state: "preview", alternatives: result.alternatives, currentIdx: 0 }
+                      : prev);
+                  } else {
+                    setInlineAlts(null);
+                  }
+                }}
+                className="text-[10px] px-1 text-blue-600 hover:text-blue-400"
+              >
+                extend
+              </button>
             )}
             {zone === "workspace" && (
               <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "stage"); }} className="text-[10px] px-1 text-stone-600 hover:text-stone-400">stage</button>
@@ -1011,37 +1060,63 @@ export default function WorkspaceCanvas({
               containerWidth={NODE_WIDTH_FULL - 24}
             />
           ) : inlineAlts && inlineAlts.sourceFragmentId === f.id ? (
-            // Inline phrase reroll preview: render the fragment's text
-            // with the selected phrase swapped for the current alternative
-            // (or pulsing in place if the API is still in flight).
+            // Inline alternatives preview. Two modes:
+            //   replace: split content into prefix + highlighted alt + suffix
+            //   extend: render content normally + ghost continuation appended
             (() => {
               const ia = inlineAlts;
-              const before = f.content.slice(0, ia.charStart);
-              const after = f.content.slice(ia.charEnd);
               const isPending = ia.state === "pending";
               const isCommitting = ia.state === "committing";
-              const replacement = isPending
-                ? ia.selectedText
-                : ia.alternatives[ia.currentIdx] ?? ia.selectedText;
+
+              if (ia.mode === "replace") {
+                const before = f.content.slice(0, ia.charStart);
+                const after = f.content.slice(ia.charEnd);
+                const replacement = isPending
+                  ? ia.selectedText
+                  : ia.alternatives[ia.currentIdx] ?? ia.selectedText;
+                return (
+                  <div
+                    data-text-content
+                    className="whitespace-pre-wrap cursor-text"
+                    style={{ textWrap: "pretty" } as React.CSSProperties}
+                  >
+                    {before}
+                    <span
+                      className={
+                        isPending
+                          ? "rounded px-0.5 bg-violet-500/15 text-violet-200/80 animate-pulse"
+                          : isCommitting
+                          ? "rounded px-0.5 bg-emerald-500/30 text-emerald-100"
+                          : "rounded px-0.5 bg-violet-500/30 text-violet-100 transition-colors"
+                      }
+                    >
+                      {replacement}
+                    </span>
+                    {after}
+                  </div>
+                );
+              }
+
+              // extend mode — original content stays put, ghost continuation
+              // appended after a paragraph break in emerald-tint to mark it
+              // as candidate not-yet-committed text.
+              const ghost = isPending
+                ? "…"
+                : ia.alternatives[ia.currentIdx] ?? "";
+              const ghostClass = isPending
+                ? "rounded px-0.5 bg-emerald-500/15 text-emerald-300/70 animate-pulse"
+                : isCommitting
+                ? "rounded px-0.5 bg-emerald-500/40 text-emerald-100"
+                : "rounded px-0.5 bg-emerald-500/20 text-emerald-100/95 transition-colors";
               return (
                 <div
                   data-text-content
                   className="whitespace-pre-wrap cursor-text"
                   style={{ textWrap: "pretty" } as React.CSSProperties}
                 >
-                  {before}
-                  <span
-                    className={
-                      isPending
-                        ? "rounded px-0.5 bg-violet-500/15 text-violet-200/80 animate-pulse"
-                        : isCommitting
-                        ? "rounded px-0.5 bg-emerald-500/30 text-emerald-100"
-                        : "rounded px-0.5 bg-violet-500/30 text-violet-100 transition-colors"
-                    }
-                  >
-                    {replacement}
-                  </span>
-                  {after}
+                  {f.content}
+                  {"\n\n"}
+                  <span className={ghostClass}>{ghost}</span>
                 </div>
               );
             })()
@@ -1255,9 +1330,8 @@ export default function WorkspaceCanvas({
                 const sourceId = splitToolbar.fragmentId;
                 const charStart = splitToolbar.charStart;
                 const charEnd = splitToolbar.charEnd;
-                // Enter inline-alts pending state immediately so the
-                // user gets visible feedback before the slow API call.
                 setInlineAlts({
+                  mode: "replace",
                   sourceFragmentId: sourceId,
                   selectedText,
                   charStart,
@@ -1271,7 +1345,7 @@ export default function WorkspaceCanvas({
                 window.getSelection()?.removeAllRanges();
                 const result = await onReplace(sourceId, selectedText, frag.content);
                 if (result && result.alternatives.length > 0) {
-                  setInlineAlts((prev) => prev && prev.sourceFragmentId === sourceId
+                  setInlineAlts((prev) => prev && prev.mode === "replace" && prev.sourceFragmentId === sourceId
                     ? { ...prev, state: "preview", alternatives: result.alternatives, currentIdx: 0 }
                     : prev);
                 } else {
