@@ -1,5 +1,43 @@
 # Experiment D — Inline alternatives during reroll
 
+## v2 (2026-05-05) — In-place preview, no duplicates
+
+**Aditya's feedback after testing v1:** *"I want to see a spinner with a small countdown so I know what the eta to see the options. AND I do not want new nodes — I want the selected text to change color and small 1/3 so I can use arrows to cycle through the phrases and see how it looks in context. Right now it just makes duplicates and it's a pain to move around."*
+
+**Diagnosis:** v1's panel-with-derived-siblings approach was fundamentally wrong. Three problems:
+- Panel sat below the fragment competing with the writing surface.
+- API created 5 derived sibling fragments (one per alternative). They were "alts hidden" on canvas but cluttered tree view + workspace data.
+- No in-context preview — alternatives shown as separate text rows, not in their actual surrounding sentence.
+
+**v2 design (what Aditya described and got built):**
+- API gains an `ephemeral: true` mode (now the default) that returns just the alternative phrase strings without writing siblings. Workspace stays clean.
+- The *source fragment's text* now renders with the original phrase swapped for the current alternative, color-highlighted (violet bg) in place. The writer sees the alternative IN context.
+- A tiny badge floats above the fragment: pending = `● 1.3s · ~12s`, preview = `← 1/5 → ↵ pick · esc revert`, committing = `committing…`.
+- ArrowLeft / ArrowRight (and Up/Down/Tab) cycle through alternatives.
+- Enter commits via `/api/tree/edit` (in-place edit on the source fragment — no new nodes).
+- Esc reverts to original — badge disappears, fragment back to its original text, alternatives discarded entirely.
+
+**Files added/changed (v2 on top of v1):**
+- `src/app/api/tree/reroll-phrase/route.ts` — new `ephemeral?: boolean` body field; returns `{alternatives: string[]}`. Persisted mode kept for backward-compat. Prompt rewritten to ask for just the N replacement phrases (not full re-renders).
+- `src/components/loom/LoomInterface.tsx` — `handleReplace` now uses `ephemeral: true` and returns alternatives; new `handleCommitPhraseEdit` calls `/api/tree/edit`.
+- `src/components/loom/WorkspaceCanvas.tsx`:
+  - New module-level `InlineRerollBadge` component.
+  - `inlineAlts` state shape changed: tracks `alternatives: string[]` and `currentIdx` instead of `siblingIds`.
+  - Replace button click handler captures `charStart`/`charEnd`, enters pending state, awaits ephemeral API, transitions to preview.
+  - FULL render path now substitutes the source fragment's text with the current alternative when this fragment is the active source.
+  - Keyboard effect: arrow keys cycle, Enter commits, Esc dismisses.
+  - Old big-panel render block removed.
+- `src/components/loom/InlineAlternativesPanel.tsx` — kept on disk (unused for reroll path; potentially reusable for the deferred extend path).
+
+**Verified screenshots:** `005-inline-pending.png`, `005-inline-preview.png`, `005-inline-cycle-2.png`, `005-inline-cycle-3.png`, `005-inline-after-esc.png` — full flow works end-to-end. Esc leaves zero residue (no new fragments, no new edges, original content restored).
+
+**Known follow-on:** the model sometimes returns alternatives that include the original phrase ("intentional friction" as an alternative for "friction"). Prompt-engineering issue, not UX. Easy to iterate on by tightening the system prompt.
+
+---
+
+## v1 (2026-05-04) — Panel-with-siblings (deprecated by v2)
+
+
 **Status:** ✅ MVP done (reroll path; extend path deferred)
 **Branch:** `exp/phase-transition-canvas`
 **Time:** ~50 min

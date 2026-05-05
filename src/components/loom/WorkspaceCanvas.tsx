@@ -31,8 +31,8 @@ interface WorkspaceCanvasProps {
     fragmentId: string,
     selectedText: string,
     fullContent: string
-  ) => Promise<{ siblingNodeIds: string[] } | null> | void;
-  onSelectFragmentSibling?: (siblingId: string) => Promise<void> | void;
+  ) => Promise<{ alternatives: string[] } | null> | void;
+  onCommitPhraseEdit?: (fragmentId: string, newContent: string) => Promise<void> | void;
   onSubmitMessage: (text: string) => void;
   onSelectFragment: (fragmentId: string) => void;
   onRefresh: () => void;
@@ -65,6 +65,55 @@ function getNodeWidth(sz: SemanticZoom): number {
     case "compact": return NODE_WIDTH_COMPACT;
     case "dot": return NODE_WIDTH_DOT;
   }
+}
+
+// Tiny floating badge for the inline phrase reroll. Pending: spinner +
+// elapsed counter + ETA. Preview: index of N + arrow hints. Anchored
+// above the source fragment so it doesn't displace text.
+function InlineRerollBadge({
+  state,
+  startedAt,
+  currentIdx,
+  total,
+}: {
+  state: "pending" | "preview" | "committing";
+  startedAt: number;
+  currentIdx: number;
+  total: number;
+}) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (state !== "pending") return;
+    const id = setInterval(() => force((n) => n + 1), 100);
+    return () => clearInterval(id);
+  }, [state]);
+
+  if (state === "pending") {
+    const elapsed = (Date.now() - startedAt) / 1000;
+    const eta = 12;
+    return (
+      <div className="absolute -top-7 left-2 z-50 flex items-center gap-1.5 px-2 py-0.5 rounded bg-violet-950/80 border border-violet-700/60 text-[10px] text-violet-200 font-mono pointer-events-none">
+        <span className="inline-block w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+        <span className="tabular-nums">{elapsed.toFixed(1)}s · ~{eta}s</span>
+      </div>
+    );
+  }
+  if (state === "committing") {
+    return (
+      <div className="absolute -top-7 left-2 z-50 px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-[10px] text-emerald-200 font-mono pointer-events-none">
+        committing…
+      </div>
+    );
+  }
+  // preview
+  return (
+    <div className="absolute -top-7 left-2 z-50 flex items-center gap-1.5 px-2 py-0.5 rounded bg-violet-950/80 border border-violet-600/70 text-[10px] text-violet-100 font-mono pointer-events-auto">
+      <span className="text-violet-300">←</span>
+      <span className="tabular-nums">{currentIdx + 1}/{total}</span>
+      <span className="text-violet-300">→</span>
+      <span className="text-violet-500/80 ml-1">↵ pick · esc revert</span>
+    </div>
+  );
 }
 
 // Estimate the rendered height of a fragment so dagre + physics give it
@@ -234,7 +283,7 @@ export default function WorkspaceCanvas({
   onEdit,
   onGenerate,
   onReplace,
-  onSelectFragmentSibling,
+  onCommitPhraseEdit,
   onSubmitMessage,
   onSelectFragment,
   onRefresh,
@@ -262,22 +311,59 @@ export default function WorkspaceCanvas({
     confirmed: boolean;
   } | null>(null);
 
-  // Inline alternatives state (Experiment D MVP). When the user clicks
-  // "replace" on a selected span, we show:
-  //   1. A spinner + elapsed counter near the source fragment while the
-  //      reroll-phrase API call is in flight.
-  //   2. After it returns, the N derived siblings rendered inline as
-  //      colored ghost text below the source. Click one to commit (swap
-  //      it into the sequence in place of the source). Esc to dismiss
-  //      (siblings remain as derived nodes in tree view but disappear
-  //      from canvas).
+  // Inline phrase reroll state. When the user clicks "replace" on a
+  // selected span, we don't create new nodes. We:
+  //   1. Show a tiny badge above the source fragment with a live
+  //      countdown while the API call is in flight.
+  //   2. Once alternatives arrive, render them IN PLACE — the
+  //      source fragment's text shows the original prefix, then a
+  //      highlighted span where the original phrase used to be (now
+  //      showing the current alternative), then the suffix. Arrow
+  //      keys cycle through alternatives + the original; Enter
+  //      commits as an in-place edit; Esc dismisses with no change.
   const [inlineAlts, setInlineAlts] = useState<{
-    sourceId: string;
-    state: "pending" | "ready" | "committing";
-    startedAt: number;
-    siblingIds: string[];      // populated after API returns
+    sourceFragmentId: string;
     selectedText: string;
+    charStart: number;
+    charEnd: number;
+    state: "pending" | "preview" | "committing";
+    alternatives: string[];   // populated after API returns
+    currentIdx: number;        // 0..N-1 — the alternative currently substituted
+    startedAt: number;
   } | null>(null);
+
+  // Keyboard shortcuts during the in-place phrase reroll preview.
+  // Arrows cycle through alternatives, Enter commits, Esc reverts.
+  useEffect(() => {
+    if (!inlineAlts || inlineAlts.state !== "preview") return;
+    const handler = (e: KeyboardEvent) => {
+      const N = inlineAlts.alternatives.length;
+      if (N === 0) return;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
+        e.preventDefault();
+        setInlineAlts((prev) => prev ? { ...prev, currentIdx: (prev.currentIdx + 1) % N } : prev);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
+        e.preventDefault();
+        setInlineAlts((prev) => prev ? { ...prev, currentIdx: (prev.currentIdx - 1 + N) % N } : prev);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const ia = inlineAlts;
+        const alt = ia.alternatives[ia.currentIdx];
+        const frag = ws.fragments[ia.sourceFragmentId];
+        if (!alt || !frag || !onCommitPhraseEdit) return;
+        const newContent = frag.content.slice(0, ia.charStart) + alt + frag.content.slice(ia.charEnd);
+        setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
+        Promise.resolve(onCommitPhraseEdit(ia.sourceFragmentId, newContent)).finally(() => {
+          setInlineAlts(null);
+        });
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        setInlineAlts(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [inlineAlts, onCommitPhraseEdit, ws.fragments]);
 
   // Velocity tracking for physics injection on drag release
   const lastDragPosRef = useRef<Position | null>(null);
@@ -801,6 +887,19 @@ export default function WorkspaceCanvas({
         onPointerUp={handlePointerUp}
         onDoubleClick={() => startEdit(f)}
       >
+        {/* Inline-phrase-reroll badge — only when this fragment is the
+            active source for an in-place phrase preview. Shows the live
+            countdown during pending and the index/cycle hint during
+            preview. Tiny, anchored above the chrome row. */}
+        {inlineAlts && inlineAlts.sourceFragmentId === f.id && (
+          <InlineRerollBadge
+            state={inlineAlts.state}
+            startedAt={inlineAlts.startedAt}
+            currentIdx={inlineAlts.currentIdx}
+            total={inlineAlts.alternatives.length}
+          />
+        )}
+
         {/* Hover toolbar: chrome lives here, hidden until hover. Positioned
             above the text so it doesn't displace the layout. */}
         <div className="absolute -top-6 left-2 right-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -856,6 +955,41 @@ export default function WorkspaceCanvas({
               }}
               containerWidth={NODE_WIDTH_FULL - 24}
             />
+          ) : inlineAlts && inlineAlts.sourceFragmentId === f.id ? (
+            // Inline phrase reroll preview: render the fragment's text
+            // with the selected phrase swapped for the current alternative
+            // (or pulsing in place if the API is still in flight).
+            (() => {
+              const ia = inlineAlts;
+              const before = f.content.slice(0, ia.charStart);
+              const after = f.content.slice(ia.charEnd);
+              const isPending = ia.state === "pending";
+              const isCommitting = ia.state === "committing";
+              const replacement = isPending
+                ? ia.selectedText
+                : ia.alternatives[ia.currentIdx] ?? ia.selectedText;
+              return (
+                <div
+                  data-text-content
+                  className="whitespace-pre-wrap cursor-text"
+                  style={{ textWrap: "pretty" } as React.CSSProperties}
+                >
+                  {before}
+                  <span
+                    className={
+                      isPending
+                        ? "rounded px-0.5 bg-violet-500/15 text-violet-200/80 animate-pulse"
+                        : isCommitting
+                        ? "rounded px-0.5 bg-emerald-500/30 text-emerald-100"
+                        : "rounded px-0.5 bg-violet-500/30 text-violet-100 transition-colors"
+                    }
+                  >
+                    {replacement}
+                  </span>
+                  {after}
+                </div>
+              );
+            })()
           ) : (
             <div
               data-text-content
@@ -871,7 +1005,8 @@ export default function WorkspaceCanvas({
     );
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
-      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit, onGenerate]);
+      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit, onGenerate,
+      inlineAlts]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
@@ -1060,24 +1195,28 @@ export default function WorkspaceCanvas({
                 }
                 const selectedText = frag.content.slice(splitToolbar.charStart, splitToolbar.charEnd);
                 const sourceId = splitToolbar.fragmentId;
+                const charStart = splitToolbar.charStart;
+                const charEnd = splitToolbar.charEnd;
                 // Enter inline-alts pending state immediately so the
                 // user gets visible feedback before the slow API call.
                 setInlineAlts({
-                  sourceId,
-                  state: "pending",
-                  startedAt: Date.now(),
-                  siblingIds: [],
+                  sourceFragmentId: sourceId,
                   selectedText,
+                  charStart,
+                  charEnd,
+                  state: "pending",
+                  alternatives: [],
+                  currentIdx: 0,
+                  startedAt: Date.now(),
                 });
                 setSplitToolbar(null);
                 window.getSelection()?.removeAllRanges();
                 const result = await onReplace(sourceId, selectedText, frag.content);
-                if (result && result.siblingNodeIds.length > 0) {
-                  setInlineAlts((prev) => prev && prev.sourceId === sourceId
-                    ? { ...prev, state: "ready", siblingIds: result.siblingNodeIds }
+                if (result && result.alternatives.length > 0) {
+                  setInlineAlts((prev) => prev && prev.sourceFragmentId === sourceId
+                    ? { ...prev, state: "preview", alternatives: result.alternatives, currentIdx: 0 }
                     : prev);
                 } else {
-                  // No siblings came back (error or 0 alternatives) — clear the overlay
                   setInlineAlts(null);
                 }
               }}
@@ -1129,32 +1268,10 @@ export default function WorkspaceCanvas({
             />
           )}
 
-          {/* Inline alternatives overlay (Experiment D MVP) */}
-          {inlineAlts && positions[inlineAlts.sourceId] && (() => {
-            const sourcePos = positions[inlineAlts.sourceId];
-            const sourceFrag = ws.fragments[inlineAlts.sourceId];
-            const sourceH = sourceFrag ? heightFor(sourceFrag) : nodeH;
-            const altX = sourcePos.x;
-            const altY = sourcePos.y + sourceH + 12;
-            return (
-              <InlineAlternativesPanel
-                anchorX={altX}
-                anchorY={altY}
-                width={nodeWidth}
-                state={inlineAlts.state}
-                startedAt={inlineAlts.startedAt}
-                selectedText={inlineAlts.selectedText}
-                siblings={inlineAlts.siblingIds.map((id) => ws.fragments[id]).filter(Boolean) as Fragment[]}
-                onPick={async (siblingId) => {
-                  if (!onSelectFragmentSibling) return;
-                  setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
-                  await onSelectFragmentSibling(siblingId);
-                  setInlineAlts(null);
-                }}
-                onDismiss={() => setInlineAlts(null)}
-              />
-            );
-          })()}
+          {/* Inline phrase reroll renders directly inside the source
+              fragment's content (see renderFragment's FULL path) and
+              uses the InlineRerollBadge floating above. No separate
+              overlay component here. */}
         </div>
       </div>
 

@@ -383,36 +383,43 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     await refreshTree();
   };
 
+  // Ephemeral phrase reroll: returns just the N alternative phrase strings
+  // without writing any sibling fragments to the workspace. The canvas
+  // previews them in place; commit happens via handleCommitPhraseEdit.
   const handleReplace = async (
     fragmentId: string,
     selectedText: string,
     fullContent: string
-  ): Promise<{ siblingNodeIds: string[] } | null> => {
+  ): Promise<{ alternatives: string[] } | null> => {
     const t0 = performance.now();
-    console.log(`[viveka-ui] replace phrase in fragment ${fragmentId.slice(0, 8)}: "${selectedText.slice(0, 40)}..."`);
+    console.log(`[viveka-ui] reroll-phrase ephemeral for fragment ${fragmentId.slice(0, 8)}: "${selectedText.slice(0, 40)}..."`);
     try {
       const res = await fetch("/api/tree/reroll-phrase", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ treeId: tree.id, nodeId: fragmentId, selectedText, fullContent }),
+        body: JSON.stringify({
+          treeId: tree.id, nodeId: fragmentId, selectedText, fullContent,
+          ephemeral: true,
+        }),
       });
       const data = await res.json();
-      console.log(`[viveka-ui] replace returned in ${(performance.now() - t0).toFixed(0)}ms — ${data.siblingNodeIds?.length ?? 0} alternatives`);
-      await refreshTree();
-      return { siblingNodeIds: data.siblingNodeIds ?? [] };
+      console.log(`[viveka-ui] reroll-phrase returned in ${(performance.now() - t0).toFixed(0)}ms — ${data.alternatives?.length ?? 0} alternatives`);
+      // No refresh needed — ephemeral mode wrote nothing
+      return { alternatives: data.alternatives ?? [] };
     } catch (err) {
-      console.error("[viveka-ui] replace failed:", err);
-      await refreshTree();
+      console.error("[viveka-ui] reroll-phrase failed:", err);
       return null;
     }
   };
 
-  const handleSelectFragmentSibling = async (siblingId: string) => {
-    console.log(`[viveka-ui] select sibling ${siblingId.slice(0, 8)}`);
-    await fetch("/api/tree/select", {
+  // Commit the chosen alternative as an in-place edit on the source
+  // fragment. No new nodes; the original gets new content.
+  const handleCommitPhraseEdit = async (fragmentId: string, newContent: string) => {
+    console.log(`[viveka-ui] commit phrase edit on fragment ${fragmentId.slice(0, 8)}`);
+    await fetch("/api/tree/edit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ treeId: tree.id, nodeId: siblingId }),
+      body: JSON.stringify({ treeId: tree.id, nodeId: fragmentId, content: newContent }),
     });
     await refreshTree();
   };
@@ -586,7 +593,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           onEdit={handleEdit}
           onGenerate={handleExtend}
           onReplace={handleReplace}
-          onSelectFragmentSibling={handleSelectFragmentSibling}
+          onCommitPhraseEdit={handleCommitPhraseEdit}
           onSubmitMessage={sendUserMessage}
           onSelectFragment={async (fragId) => {
             await fetch("/api/tree/zone", {
@@ -740,7 +747,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onEdit={handleEdit}
               onGenerate={handleExtend}
               onReplace={handleReplace}
-              onSelectFragmentSibling={handleSelectFragmentSibling}
+              onCommitPhraseEdit={handleCommitPhraseEdit}
               onSubmitMessage={sendUserMessage}
               onSelectFragment={async (fragId) => {
                 // Add unplaced fragment to sequence
