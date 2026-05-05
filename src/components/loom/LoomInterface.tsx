@@ -383,12 +383,36 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     await refreshTree();
   };
 
-  const handleReplace = async (fragmentId: string, selectedText: string, fullContent: string) => {
+  const handleReplace = async (
+    fragmentId: string,
+    selectedText: string,
+    fullContent: string
+  ): Promise<{ siblingNodeIds: string[] } | null> => {
+    const t0 = performance.now();
     console.log(`[viveka-ui] replace phrase in fragment ${fragmentId.slice(0, 8)}: "${selectedText.slice(0, 40)}..."`);
-    await fetch("/api/tree/reroll-phrase", {
+    try {
+      const res = await fetch("/api/tree/reroll-phrase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ treeId: tree.id, nodeId: fragmentId, selectedText, fullContent }),
+      });
+      const data = await res.json();
+      console.log(`[viveka-ui] replace returned in ${(performance.now() - t0).toFixed(0)}ms — ${data.siblingNodeIds?.length ?? 0} alternatives`);
+      await refreshTree();
+      return { siblingNodeIds: data.siblingNodeIds ?? [] };
+    } catch (err) {
+      console.error("[viveka-ui] replace failed:", err);
+      await refreshTree();
+      return null;
+    }
+  };
+
+  const handleSelectFragmentSibling = async (siblingId: string) => {
+    console.log(`[viveka-ui] select sibling ${siblingId.slice(0, 8)}`);
+    await fetch("/api/tree/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ treeId: tree.id, nodeId: fragmentId, selectedText, fullContent }),
+      body: JSON.stringify({ treeId: tree.id, nodeId: siblingId }),
     });
     await refreshTree();
   };
@@ -562,6 +586,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           onEdit={handleEdit}
           onGenerate={handleExtend}
           onReplace={handleReplace}
+          onSelectFragmentSibling={handleSelectFragmentSibling}
           onSubmitMessage={sendUserMessage}
           onSelectFragment={async (fragId) => {
             await fetch("/api/tree/zone", {
@@ -715,6 +740,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onEdit={handleEdit}
               onGenerate={handleExtend}
               onReplace={handleReplace}
+              onSelectFragmentSibling={handleSelectFragmentSibling}
               onSubmitMessage={sendUserMessage}
               onSelectFragment={async (fragId) => {
                 // Add unplaced fragment to sequence

@@ -6,6 +6,7 @@ import { usePanZoom } from "@/hooks/usePanZoom";
 import { usePhysicsSimulation, angleToMergeType } from "@/hooks/usePhysicsSimulation";
 import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
 import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
+import InlineAlternativesPanel from "./InlineAlternativesPanel";
 import dagre from "dagre";
 import WordLevelContent from "./WordLevelContent";
 
@@ -26,7 +27,12 @@ interface WorkspaceCanvasProps {
   onZoneTransfer: (fragmentId: string, toZone: string) => void;
   onEdit: (fragmentId: string, content: string) => void;
   onGenerate: (parentFragmentId: string) => void;
-  onReplace: (fragmentId: string, selectedText: string, fullContent: string) => void;
+  onReplace: (
+    fragmentId: string,
+    selectedText: string,
+    fullContent: string
+  ) => Promise<{ siblingNodeIds: string[] } | null> | void;
+  onSelectFragmentSibling?: (siblingId: string) => Promise<void> | void;
   onSubmitMessage: (text: string) => void;
   onSelectFragment: (fragmentId: string) => void;
   onRefresh: () => void;
@@ -228,6 +234,7 @@ export default function WorkspaceCanvas({
   onEdit,
   onGenerate,
   onReplace,
+  onSelectFragmentSibling,
   onSubmitMessage,
   onSelectFragment,
   onRefresh,
@@ -253,6 +260,23 @@ export default function WorkspaceCanvas({
     mergeType: MergeType;
     startedAt: number;
     confirmed: boolean;
+  } | null>(null);
+
+  // Inline alternatives state (Experiment D MVP). When the user clicks
+  // "replace" on a selected span, we show:
+  //   1. A spinner + elapsed counter near the source fragment while the
+  //      reroll-phrase API call is in flight.
+  //   2. After it returns, the N derived siblings rendered inline as
+  //      colored ghost text below the source. Click one to commit (swap
+  //      it into the sequence in place of the source). Esc to dismiss
+  //      (siblings remain as derived nodes in tree view but disappear
+  //      from canvas).
+  const [inlineAlts, setInlineAlts] = useState<{
+    sourceId: string;
+    state: "pending" | "ready" | "committing";
+    startedAt: number;
+    siblingIds: string[];      // populated after API returns
+    selectedText: string;
   } | null>(null);
 
   // Velocity tracking for physics injection on drag release
@@ -1027,14 +1051,35 @@ export default function WorkspaceCanvas({
           {splitToolbar && semanticZoom === "full" && (
             <div className="absolute z-50 flex gap-1 bg-stone-800 border border-stone-600 rounded-lg shadow-xl px-1.5 py-1 -translate-x-1/2 -translate-y-full pointer-events-auto"
               style={{ left: splitToolbar.x, top: splitToolbar.y }}>
-              <button onMouseDown={(e) => {
+              <button onMouseDown={async (e) => {
                 e.preventDefault();
                 const frag = ws.fragments[splitToolbar.fragmentId];
-                if (frag) {
-                  const selectedText = frag.content.slice(splitToolbar.charStart, splitToolbar.charEnd);
-                  onReplace(splitToolbar.fragmentId, selectedText, frag.content);
+                if (!frag) {
+                  setSplitToolbar(null); window.getSelection()?.removeAllRanges();
+                  return;
                 }
-                setSplitToolbar(null); window.getSelection()?.removeAllRanges(); onRefresh();
+                const selectedText = frag.content.slice(splitToolbar.charStart, splitToolbar.charEnd);
+                const sourceId = splitToolbar.fragmentId;
+                // Enter inline-alts pending state immediately so the
+                // user gets visible feedback before the slow API call.
+                setInlineAlts({
+                  sourceId,
+                  state: "pending",
+                  startedAt: Date.now(),
+                  siblingIds: [],
+                  selectedText,
+                });
+                setSplitToolbar(null);
+                window.getSelection()?.removeAllRanges();
+                const result = await onReplace(sourceId, selectedText, frag.content);
+                if (result && result.siblingNodeIds.length > 0) {
+                  setInlineAlts((prev) => prev && prev.sourceId === sourceId
+                    ? { ...prev, state: "ready", siblingIds: result.siblingNodeIds }
+                    : prev);
+                } else {
+                  // No siblings came back (error or 0 alternatives) — clear the overlay
+                  setInlineAlts(null);
+                }
               }}
                 className="text-xs px-2 py-0.5 text-violet-300 hover:bg-violet-900/50 rounded">replace</button>
               <button onMouseDown={(e) => { e.preventDefault(); onSplitRange(splitToolbar.fragmentId, splitToolbar.charStart, splitToolbar.charEnd); setSplitToolbar(null); window.getSelection()?.removeAllRanges(); onRefresh(); }}
@@ -1083,6 +1128,33 @@ export default function WorkspaceCanvas({
               confirmed={mergeCandidate.confirmed}
             />
           )}
+
+          {/* Inline alternatives overlay (Experiment D MVP) */}
+          {inlineAlts && positions[inlineAlts.sourceId] && (() => {
+            const sourcePos = positions[inlineAlts.sourceId];
+            const sourceFrag = ws.fragments[inlineAlts.sourceId];
+            const sourceH = sourceFrag ? heightFor(sourceFrag) : nodeH;
+            const altX = sourcePos.x;
+            const altY = sourcePos.y + sourceH + 12;
+            return (
+              <InlineAlternativesPanel
+                anchorX={altX}
+                anchorY={altY}
+                width={nodeWidth}
+                state={inlineAlts.state}
+                startedAt={inlineAlts.startedAt}
+                selectedText={inlineAlts.selectedText}
+                siblings={inlineAlts.siblingIds.map((id) => ws.fragments[id]).filter(Boolean) as Fragment[]}
+                onPick={async (siblingId) => {
+                  if (!onSelectFragmentSibling) return;
+                  setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
+                  await onSelectFragmentSibling(siblingId);
+                  setInlineAlts(null);
+                }}
+                onDismiss={() => setInlineAlts(null)}
+              />
+            );
+          })()}
         </div>
       </div>
 
