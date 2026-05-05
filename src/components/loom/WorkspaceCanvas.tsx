@@ -5,7 +5,7 @@ import type { Workspace, Fragment, Edge } from "@/lib/workspace";
 import { usePanZoom } from "@/hooks/usePanZoom";
 import { usePhysicsSimulation, angleToMergeType } from "@/hooks/usePhysicsSimulation";
 import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
-import { MergeSpinner } from "./MergeSpinner";
+import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
 import dagre from "dagre";
 import WordLevelContent from "./WordLevelContent";
 
@@ -934,11 +934,16 @@ export default function WorkspaceCanvas({
 
             {/* Proximity gradient (Experiment B): ambient teal connection
                 between fragment pairs within r_flow. Two layered strokes —
-                a thick blurred halo and a thin solid core — so that
-                low-intensity pairs read as a soft glow and high-intensity
-                pairs read as a confident bond. The visual cue grows with
-                closeness; the merge gesture (Experiment C) fires when the
-                bond is strong. */}
+                halo + core — so low-intensity pairs read as a soft glow
+                and high-intensity pairs read as a confident bond.
+
+                Experiment C overlay: the pair that is the active
+                merge-candidate (already detected by the physics
+                collision-merge) gets max intensity, no dashing, and the
+                color of the merge type the spinner shows — so the
+                gradient's vibe matches the merge variant the user is
+                about to commit (blue=append, amber=prepend,
+                violet=interleave, teal=summarize). */}
             {proximityPairs.map((p, i) => {
               const posA = positions[p.a];
               const posB = positions[p.b];
@@ -958,7 +963,6 @@ export default function WorkspaceCanvas({
               const dy = cBy - cAy;
               let x1: number, y1: number, x2: number, y2: number;
               if (Math.abs(dy) > Math.abs(dx)) {
-                // Vertical orientation — connect bottom of upper to top of lower
                 if (dy > 0) {
                   x1 = cAx; y1 = posA.y + hA;
                   x2 = cBx; y2 = posB.y;
@@ -967,7 +971,6 @@ export default function WorkspaceCanvas({
                   x2 = cBx; y2 = posB.y + hB;
                 }
               } else {
-                // Horizontal orientation — connect right of left to left of right
                 if (dx > 0) {
                   x1 = posA.x + nodeWidth; y1 = cAy;
                   x2 = posB.x; y2 = cBy;
@@ -976,23 +979,32 @@ export default function WorkspaceCanvas({
                   x2 = posB.x + nodeWidth; y2 = cBy;
                 }
               }
-              const haloOpacity = 0.05 + 0.35 * p.intensity;
-              const coreOpacity = 0.20 + 0.55 * p.intensity;
-              const haloWidth = 6 + p.intensity * 10;
-              const coreWidth = 0.8 + p.intensity * 2.0;
+
+              const isMergeCandidate = !!mergeCandidate &&
+                ((mergeCandidate.draggedId === p.a && mergeCandidate.targetId === p.b) ||
+                 (mergeCandidate.draggedId === p.b && mergeCandidate.targetId === p.a));
+
+              const intensity = isMergeCandidate ? 1 : p.intensity;
+              const haloOpacity = (isMergeCandidate ? 0.20 : 0.05) + (isMergeCandidate ? 0.45 : 0.35) * intensity;
+              const coreOpacity = (isMergeCandidate ? 0.55 : 0.20) + (isMergeCandidate ? 0.40 : 0.55) * intensity;
+              const haloWidth = (isMergeCandidate ? 12 : 6) + intensity * (isMergeCandidate ? 16 : 10);
+              const coreWidth = (isMergeCandidate ? 1.5 : 0.8) + intensity * (isMergeCandidate ? 3.0 : 2.0);
+              const haloRgb = isMergeCandidate ? MERGE_COLORS_RGB[mergeCandidate.mergeType] : "94, 234, 212";
+              const coreRgb = isMergeCandidate ? MERGE_COLORS_RGB[mergeCandidate.mergeType] : "167, 243, 208";
+
               return (
                 <g key={`prox-${i}`}>
                   <line
                     x1={x1} y1={y1} x2={x2} y2={y2}
-                    stroke={`rgba(94, 234, 212, ${haloOpacity})`}
+                    stroke={`rgba(${haloRgb}, ${haloOpacity})`}
                     strokeWidth={haloWidth}
                     strokeLinecap="round"
                   />
                   <line
                     x1={x1} y1={y1} x2={x2} y2={y2}
-                    stroke={`rgba(167, 243, 208, ${coreOpacity})`}
+                    stroke={`rgba(${coreRgb}, ${coreOpacity})`}
                     strokeWidth={coreWidth}
-                    strokeDasharray={p.intensity > 0.5 ? undefined : `${4 + p.intensity * 6} ${4}`}
+                    strokeDasharray={isMergeCandidate || intensity > 0.5 ? undefined : `${4 + intensity * 6} ${4}`}
                     strokeLinecap="round"
                   />
                 </g>

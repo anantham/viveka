@@ -2,13 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type MergeType = "prepend" | "append" | "interleave" | "summarize";
+export type MergeType = "prepend" | "append" | "interleave" | "summarize";
 
-const MERGE_COLORS: Record<MergeType, string> = {
+export const MERGE_COLORS: Record<MergeType, string> = {
   append: "#3b82f6",     // blue
   prepend: "#f59e0b",    // amber
   interleave: "#8b5cf6", // violet
   summarize: "#14b8a6",  // teal
+};
+
+// Same colors as RGB triples so we can compose with alpha at render time.
+export const MERGE_COLORS_RGB: Record<MergeType, string> = {
+  append: "59, 130, 246",
+  prepend: "245, 158, 11",
+  interleave: "139, 92, 246",
+  summarize: "20, 184, 166",
 };
 
 const MERGE_LABELS: Record<MergeType, string> = {
