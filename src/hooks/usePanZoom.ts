@@ -110,12 +110,15 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
 
   // Fit a content bounding box (in canvas-content coordinates, before pan/zoom)
   // into the viewport, with optional padding. Pan + zoom are computed so the
-  // bbox is centered.
+  // bbox is centered. `maxFitZoom` caps the auto-zoom-in case so a single
+  // tiny fragment doesn't fill the whole screen — defaults to 1.5x; the
+  // user can still zoom in further manually.
   const fitToBox = useCallback(
     (
       bbox: { minX: number; minY: number; maxX: number; maxY: number },
       viewport: { width: number; height: number },
-      paddingFraction = 0.1
+      paddingFraction = 0.1,
+      maxFitZoom = 1.5
     ) => {
       const bboxW = Math.max(1, bbox.maxX - bbox.minX);
       const bboxH = Math.max(1, bbox.maxY - bbox.minY);
@@ -123,7 +126,8 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
       const padY = viewport.height * paddingFraction;
       const availW = Math.max(1, viewport.width - 2 * padX);
       const availH = Math.max(1, viewport.height - 2 * padY);
-      const fitZoom = Math.min(maxZoom, Math.max(minZoom, Math.min(availW / bboxW, availH / bboxH)));
+      const rawZoom = Math.min(availW / bboxW, availH / bboxH);
+      const fitZoom = Math.min(maxFitZoom, Math.min(maxZoom, Math.max(minZoom, rawZoom)));
 
       // Pan so that the bbox center lands at the viewport center after zoom
       const bboxCenterX = (bbox.minX + bbox.maxX) / 2;

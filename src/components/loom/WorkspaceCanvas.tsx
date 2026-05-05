@@ -494,7 +494,16 @@ export default function WorkspaceCanvas({
       maxY = Math.max(maxY, p.y + h);
     }
     if (!isFinite(minX)) return null;
-    return { minX, minY, maxX, maxY };
+    // Pad the bbox itself by a quarter-fragment-width so fragments don't
+    // sit flush against the viewport padding line — gives the layout
+    // breathing room, especially for single-fragment workspaces.
+    const inflate = nodeWidth / 4;
+    return {
+      minX: minX - inflate,
+      minY: minY - inflate,
+      maxX: maxX + inflate,
+      maxY: maxY + inflate,
+    };
   }, [allVisible, positions, nodeWidth, heightFor]);
 
   // -----------------------------------------------------------------------
