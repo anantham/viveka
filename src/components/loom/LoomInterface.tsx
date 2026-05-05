@@ -662,7 +662,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   }
 
   return (
-    <div className="flex flex-col h-screen max-w-5xl mx-auto">
+    <div className={`flex flex-col h-screen mx-auto ${view === "canvas" ? "max-w-none w-full" : "max-w-5xl"}`}>
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-stone-800">
         <div className="flex items-center gap-4">

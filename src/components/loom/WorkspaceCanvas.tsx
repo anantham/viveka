@@ -52,7 +52,7 @@ const NODE_WIDTH_SUMMARY = 320;
 const NODE_WIDTH_COMPACT = 200;
 const NODE_WIDTH_DOT = 24;
 const STAGE_X_OFFSET = 600;
-const MERGE_HOLD_MS = 4000;
+const MERGE_HOLD_MS = 2000;
 const MERGE_LLM_ETA_MS = 9000; // empirical typical wall time for /api/tree/merge
 
 // Zoom thresholds: viewport zoom → semantic level
@@ -660,12 +660,23 @@ export default function WorkspaceCanvas({
     }, []),
   });
 
-  // Final positions: physics overrides dagre, manual overrides physics
-  const positions = useMemo(() => ({
-    ...basePositions,
-    ...physicsPositions,
-    ...manualPositions,
-  }), [basePositions, physicsPositions, manualPositions]);
+  // Final positions: physics overrides dagre, manual overrides physics.
+  // Once the merge has confirmed and the user has released the mouse,
+  // glide the source fragment to the target's position so they visually
+  // fuse together during the LLM merging window. CSS transition on
+  // left/top (in renderFragment) animates the snap smoothly.
+  const positions = useMemo(() => {
+    const final: Record<string, Position> = {
+      ...basePositions,
+      ...physicsPositions,
+      ...manualPositions,
+    };
+    if (mergeCandidate?.confirmed && !dragState) {
+      const tp = final[mergeCandidate.targetId];
+      if (tp) final[mergeCandidate.draggedId] = tp;
+    }
+    return final;
+  }, [basePositions, physicsPositions, manualPositions, mergeCandidate, dragState]);
 
   // -----------------------------------------------------------------------
   // Proximity pairs (Experiment B): pairs of visible fragments within r_flow.
@@ -1025,7 +1036,9 @@ export default function WorkspaceCanvas({
           left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
           zIndex: dragState?.fragmentId === f.id ? 50 : 1,
           opacity: baseOpacity * mergeFadeOpacity,
-          transition: isMergePart ? "opacity 1.6s ease-out" : "opacity 250ms ease-out",
+          transition: isMergePart
+            ? "opacity 1.6s ease-out, left 0.6s cubic-bezier(0.4, 0, 0.2, 1), top 0.6s cubic-bezier(0.4, 0, 0.2, 1)"
+            : "opacity 250ms ease-out",
         }}
         onPointerDown={(e) => handlePointerDown(e, f.id)}
         onPointerMove={handlePointerMove}
