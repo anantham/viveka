@@ -108,15 +108,51 @@ export function simulateTick(
   const fx = new Float64Array(n);
   const fy = new Float64Array(n);
 
-  // 1. Repulsion
+  // 1. Repulsion — two passes:
+  //    (a) BBox overlap: when two fragment rendering boxes actually
+  //        intersect on the canvas, push apart along the shortest exit
+  //        direction proportional to the overlap depth. Center-based
+  //        repulsion is insufficient when fragments differ greatly in
+  //        height (a 600px-tall completion and a 100px human prompt can
+  //        have centers 400px apart while their boxes still overlap).
+  //    (b) Center-distance repulsion as before — keeps the field gentle
+  //        in the non-overlap regime.
+  const BBOX_OVERLAP_FORCE = 1.4;
+  const BBOX_OVERLAP_PADDING = 12;
   for (let i = 0; i < n; i++) {
     const a = particles[i];
+    const sizeA = nodeSize(a.id);
     for (let j = i + 1; j < n; j++) {
       const b = particles[j];
-      const sizeA = nodeSize(a.id);
       const sizeB = nodeSize(b.id);
       const cx = (a.x + sizeA.w / 2) - (b.x + sizeB.w / 2);
       const cy = (a.y + sizeA.h / 2) - (b.y + sizeB.h / 2);
+      const halfWSum = sizeA.w / 2 + sizeB.w / 2 + BBOX_OVERLAP_PADDING;
+      const halfHSum = sizeA.h / 2 + sizeB.h / 2 + BBOX_OVERLAP_PADDING;
+      const overlapX = halfWSum - Math.abs(cx);
+      const overlapY = halfHSum - Math.abs(cy);
+      // Skip bbox-overlap when either fragment is pinned — that's the
+      // user actively dragging, possibly toward a merge. The collision-
+      // merge gesture (overlap-and-hold for 2s) MUST be allowed to land
+      // bbox-overlap regardless of repulsion. Once user releases (no
+      // more pinned particle), at-rest physics kicks in and pushes
+      // any leftover overlap apart.
+      const eitherPinned = a.pinned || b.pinned;
+      if (overlapX > 0 && overlapY > 0 && !eitherPinned) {
+        if (overlapX < overlapY) {
+          const dirX = cx >= 0 ? 1 : -1;
+          const force = overlapX * BBOX_OVERLAP_FORCE;
+          fx[i] += force * dirX;
+          fx[j] -= force * dirX;
+        } else {
+          const dirY = cy >= 0 ? 1 : -1;
+          const force = overlapY * BBOX_OVERLAP_FORCE;
+          fy[i] += force * dirY;
+          fy[j] -= force * dirY;
+        }
+      }
+      // Center-distance falloff repulsion (kept for spacing in the
+      // non-overlap regime — keeps the layout breathing).
       const dist = Math.sqrt(cx * cx + cy * cy);
       if (dist > MAX_REPULSION_DIST) continue;
       const safeDist = Math.max(dist, MIN_DIST);
