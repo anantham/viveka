@@ -1,6 +1,6 @@
 # ADR-001: Viveka v0.1 — Attentional Scaffolding Interface
 
-**Status:** Draft
+**Status:** **Superseded.** This document is a frozen design doc from 2026-03-28. Most decisions shipped, but several pivoted (notably: Agent SDK → `child_process.spawn`; cursor modes → gesture-driven) and the data model was rebuilt by ADR-002. For current state read **[docs/architecture/canvas.md](../architecture/canvas.md)** and **[docs/experiments/canvas-redesign/SYNTHESIS.md](../experiments/canvas-redesign/SYNTHESIS.md)**. Resolved Open Questions are recorded at the end of this file.
 **Date:** 2026-03-28
 **Author:** Aditya / groundless.ai
 **Deciders:** Aditya, Sahil
@@ -735,3 +735,28 @@ function queryClaudeCode(prompt: string, systemPrompt: string): AsyncGenerator<s
 This tool is the generation stage of a sādhana for human-AI interaction. The reification is deliberate — we are constructing a specific form (the constrained interface) to replace the default form (the unconstrained chat). The completion stage is the user internalizing the attentional patterns and no longer needing the tool. The metric of success is declining usage over time.
 
 Beware what you ask for because you might get it.
+
+---
+
+## Resolved Open Questions (added 2026-05-05)
+
+| # | Question | Resolution | Where |
+|---|----------|------------|-------|
+| 1 | Session management: stateless `claude -p` vs persistent `ClaudeSDKClient` | **Stateless.** Every call shells out to `claude -p`, history passed manually. | `src/lib/claude.ts` |
+| 2 | Classifier cost strategy | **Hybrid (D).** Client-side heuristics on every exchange + LLM classifier on flagged ones. | `src/lib/heuristics.ts`, `src/lib/classifier.ts` |
+| 3 | Embedding model for similarity | **TF-IDF (C).** No embedding model added; cosine similarity over TF-IDF vectors does the loop-detection work. | `src/lib/heuristics.ts` |
+| 4 | Response degradation | **Hybrid.** System prompt asks for shorter responses past exchange threshold, plus formatting strips at higher budget consumption. | `src/lib/system-prompt.ts` |
+| 5 | Classifier context window | **Sliding window (C).** Last 3 exchanges + session metadata. | `src/lib/classifier.ts` |
+| 6 | Obsidian vault path configuration | **Env var (A).** `OBSIDIAN_VAULT_PATH` in `.env.local`. | `src/lib/obsidian.ts` |
+| 7 | TS Agent SDK availability | **Did not use.** The "fallback" — `child_process.spawn("claude", ["-p", ...])` — became the primary path. The `@anthropic-ai/claude-agent-sdk` package was never added to `package.json`. | `src/lib/claude.ts:1` |
+| 8 | Intent revision cost | **Free.** Revising mid-session does not consume an exchange. Implemented in `/api/session/revise`. | `src/app/api/session/revise/route.ts` |
+| 9 | Classifier model | **Sonnet via `--model` flag.** Haiku via CLI flag was not viable when this was decided; Sonnet is fine cost-wise for the hybrid strategy. | `src/lib/classifier.ts` |
+| 10 | Between-session cooldown | **Not implemented.** Was speced but never built. Lower priority since the canvas-redesign rework moved focus elsewhere. | (gap) |
+| 11 | Does `claude -p` support `--system-prompt` flag | **Yes**, with `--append-system-prompt` semantic. The shell call passes the system prompt directly. | `src/lib/claude.ts` |
+
+## Significant pivots since this ADR
+
+- **Linear chat is no longer the primary surface.** The home page now offers Dump (freeform) and LOOM (workspace + canvas). Linear sessions still exist on disk in `sessions.json` but the home-page entry was removed during the May 2026 redesign. ADR-002 reframed the model around fragments, not exchanges.
+- **Cursor modes (Select / Hand / Type / Pull from §UI Design's later refinement) were never built.** The current canvas is gesture-driven: hover-on-text → text cursor / selection, hover-on-fragment-chrome → move cursor / drag, hover-on-canvas → grab cursor / pan. See `docs/architecture/canvas.md`.
+- **Anthropomorphism debug mode** as a header toggle was not built. The pattern detection happens server-side and exports to the Obsidian session log; live underline-on-detection in the chat UI exists in `ChatInterface.tsx` but is always-on, not toggleable.
+- **Cross-session digest (`scripts/weekly-digest.ts`)** was never built. See `docs/roadmap.md` Phase 0.5.

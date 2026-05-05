@@ -38,6 +38,8 @@ These were designed in the founding conversation (`chat context.txt`) and implem
 
 ## Phase 0.5: Cross-Session Intelligence
 
+**Status (2026-05-05):** **Deferred.** Not started. The May 2026 canvas-redesign sprint (see [SYNTHESIS.md](./experiments/canvas-redesign/SYNTHESIS.md)) took the slot — the writing-exoskeleton vision asked for in-canvas operations (replace, extend, merge, unmerge) before cross-session analysis. Phase 0.5 still lives here as the next-most-natural build target after the current redesign settles, but no work has been done on it.
+
 **Why before new modes:** The original design (chat context) explicitly called for cross-session pattern analysis and declining usage as the success metric. These are core to the attentional scaffolding mission — without them, interventions are reactive (per-session) rather than revealing long-term patterns.
 
 ### Cross-Session Pattern Analysis

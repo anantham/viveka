@@ -12,7 +12,7 @@ The repo is best understood as an experimental interface lab, not a finished pro
 ## What The Docs Mean
 
 - [vision.md](./docs/vision.md) is the north-star document. It describes the broader attentional-scaffolding and compression-pipeline ambition.
-- [ADR-002-workspace-data-model.md](./docs/ADR-002-workspace-data-model.md) is the most important architecture document. Its core data-model decision is implemented.
+- [ADR-002-workspace-data-model.md](./docs/adr/ADR-002-workspace-data-model.md) is the most important architecture document. Its core data-model decision is implemented.
 - [roadmap.md](./docs/roadmap.md) mixes shipped work with near-term aspirations.
 
 Reality check:
@@ -146,7 +146,7 @@ The workspace model has four main structures:
 
 Plus `stageIds` for the stage/workspace split.
 
-See [src/lib/workspace.ts](./src/lib/workspace.ts) and [docs/ADR-002-workspace-data-model.md](./docs/ADR-002-workspace-data-model.md).
+See [src/lib/workspace.ts](./src/lib/workspace.ts) and [docs/ADR-002-workspace-data-model.md](./docs/adr/ADR-002-workspace-data-model.md).
 
 ## Running Locally
 
@@ -204,8 +204,10 @@ npm run build
 If you are new to the repo:
 1. read this README
 2. read [docs/vision.md](./docs/vision.md) for the larger thesis
-3. read [docs/ADR-002-workspace-data-model.md](./docs/ADR-002-workspace-data-model.md) for the key structural decision
-4. inspect [src/components/loom/LoomInterface.tsx](./src/components/loom/LoomInterface.tsx) and [src/components/loom/WorkspaceCanvas.tsx](./src/components/loom/WorkspaceCanvas.tsx)
+3. read [docs/architecture/canvas.md](./docs/architecture/canvas.md) for how the current canvas + workspace works
+4. read [docs/experiments/canvas-redesign/SYNTHESIS.md](./docs/experiments/canvas-redesign/SYNTHESIS.md) for the May 2026 phase-transition redesign
+5. read [docs/CONVENTIONS.md](./docs/CONVENTIONS.md) for repo patterns
+6. ADR-001 and ADR-002 in [docs/adr/](./docs/adr/) are frozen design docs — useful as historical context, not as a current spec
 
 ## Summary
 

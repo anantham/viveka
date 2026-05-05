@@ -1,6 +1,6 @@
 # ADR-002: Workspace Data Model
 
-Status: **Accepted**
+Status: **Accepted, partially shipped, amended.** The fragment-based workspace data model from this ADR is in production. Two amendments since: (1) cursor-mode language at §F2.7 is outdated — the current canvas is gesture-driven (Select / Tangent / Grab) per the May 2026 redesign. (2) Several requirement sections (notably §F2.6 Aperture controls, §F5.5 Compaction) are deferred not shipped. The migration from the older `ConversationTree` to `Workspace` is in progress; both data shapes coexist in the codebase as of 2026-05-05. Read **[docs/architecture/canvas.md](../architecture/canvas.md)** for current behaviour and **[docs/experiments/canvas-redesign/SYNTHESIS.md](../experiments/canvas-redesign/SYNTHESIS.md)** for the redesign that built on this. Resolved Open Questions are at the end of this file.
 Date: 2026-03-31 (requirements), 2026-04-01 (design decision)
 Author: Aditya / Claude
 
@@ -442,3 +442,30 @@ The primary interaction model is **cursor mode switching** (keyboard-driven):
 6. **Collaboration:** Should the model support multiple humans operating on the same workspace? (IIT facilitator mode)
 7. **Mode G:** Still undefined. Should the data model anticipate any specific capability?
 8. **Undo:** The opLog enables undo by replaying. Is that sufficient, or do we need explicit undo operations?
+
+---
+
+## Resolved Open Questions (added 2026-05-05)
+
+| # | Question | Resolution | Where |
+|---|----------|------------|-------|
+| 1 | Budget unit in fragment world | **Not yet enforced.** The budget meter and pattern interventions remained on the legacy `Session` model (still imported via `tree-session-adapter.ts`). The canvas redesign deprioritised in-canvas budget UI; if/when restored it'll be operation-count based, not turn-based. | (deferred) |
+| 2 | Snapshot granularity | **Sequence-only.** When a generation fires, the prompt context is built from `getConversationHistory(ws)` which walks `sequence` only, not the whole fragment graph. No explicit pre-generation snapshot; the operation log entry references the snapshot indirectly via `parentId` and `timestamp`. | `src/lib/workspace.ts` `getConversationHistory` |
+| 3 | Fragment granularity | **User-defined.** Anything the writer selects can become its own fragment via split. There's no minimum size enforced; in practice fragments tend to be sentences-to-paragraphs because that's the natural unit of the inline operations (replace a phrase, split a paragraph, extend from a fragment). | `src/lib/workspace.ts` `splitFragmentAtRange` |
+| 4 | Merge provenance | **`type: "merged"` with `sourceFragmentIds: [a, b]`.** No averaging or inheritance from sources — the merged fragment is its own thing, traceable to both via the array. | `src/app/api/tree/merge/route.ts` |
+| 5 | Mode transitions | **Operations, not state.** There is no "current mode" on the workspace. The user invokes specific operations (split, extend, merge, etc.) at any time. The original Mode A/B/C/D/E/F language survives in `vision.md` but is no longer represented in the data model. | (no code; intentional absence) |
+| 6 | Collaboration / facilitator mode | **Single-user only, deferred.** No multi-user support. IIT facilitator mode remains a vision item. | (deferred) |
+| 7 | Mode G | **Still undefined and the data model does not need to anticipate it.** When/if Mode G crystallises, it becomes a new operation type in `Operation` and a new endpoint. No upfront accommodation. | (deferred) |
+| 8 | Undo via replay vs explicit | **Explicit.** Each undoable operation has a paired reverse endpoint that uses `previousVersions[]` (for content) and `preMergeSnapshot` in the merge `Operation` (for sequence positions). Replay-from-zero works in principle but isn't used in the UI. | `src/app/api/tree/edit/route.ts`, `src/app/api/tree/unmerge/route.ts` |
+
+## Amendments since this ADR (May 2026)
+
+The phase-transition canvas redesign added behaviours that don't change the data model but extend the operation surface:
+
+- **Ephemeral operations.** `/api/tree/generate` and `/api/tree/reroll-phrase` now accept `ephemeral: true`, returning candidate strings without writing fragments. The frontend renders alternatives inline and commits via separate write endpoints. Net: dramatic reduction in workspace pollution from preview gestures.
+- **Merge-with-flow visual.** `MergePreview` overlays a continuous-prose preview during the merge hold; sources fade and snap to the target on release. Backed by changes to `/api/tree/merge` (eager `timing.startedAt` for live countdown, `previousVersions` stash for undo, `preMergeSnapshot` in opLog for sequence restore).
+- **Unmerge.** `/api/tree/unmerge` undoes a merge by popping `previousVersions` and reversing the sequence/stage delta.
+- **Bbox-overlap repulsion** at rest (`usePhysicsSimulation.ts`) prevents fragments from visually stacking.
+- **DOM-measured heights** drive the layout (`measuredHeights` via ResizeObserver in `WorkspaceCanvas.tsx`) — replaces the content-length estimator that was under-counting and causing overlap.
+
+Amendments are documented as part of the canvas redesign in `docs/experiments/canvas-redesign/SYNTHESIS.md` and the current-state architecture in `docs/architecture/canvas.md`.
