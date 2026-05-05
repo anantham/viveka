@@ -7,6 +7,7 @@ import { usePhysicsSimulation, angleToMergeType } from "@/hooks/usePhysicsSimula
 import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
 import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
 import InlineAlternativesPanel from "./InlineAlternativesPanel";
+import MergePreview from "./MergePreview";
 import dagre from "dagre";
 import WordLevelContent from "./WordLevelContent";
 
@@ -952,6 +953,18 @@ export default function WorkspaceCanvas({
     const textColor = modelTextColor(f);
     const isStaged = zone === "stage";
 
+    // Merge-candidate fade: when this fragment is part of an active
+    // merge, fade it out so the merged-preview overlay can dominate.
+    // Confirmed → fully invisible (the API write replaces content
+    // immediately); held but not confirmed → fades over ~1.6s to track
+    // the 2s hold timer.
+    const isMergePart = !!mergeCandidate &&
+      (mergeCandidate.draggedId === f.id || mergeCandidate.targetId === f.id);
+    const baseOpacity = zone === "unplaced" ? 0.45 : isStaged ? 0.7 : 1;
+    const mergeFadeOpacity = isMergePart
+      ? (mergeCandidate.confirmed ? 0 : 0.15)
+      : 1;
+
     return (
       <div
         key={f.id}
@@ -960,7 +973,8 @@ export default function WorkspaceCanvas({
         style={{
           left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
           zIndex: dragState?.fragmentId === f.id ? 50 : 1,
-          opacity: zone === "unplaced" ? 0.45 : isStaged ? 0.7 : 1,
+          opacity: baseOpacity * mergeFadeOpacity,
+          transition: isMergePart ? "opacity 1.6s ease-out" : "opacity 250ms ease-out",
         }}
         onPointerDown={(e) => handlePointerDown(e, f.id)}
         onPointerMove={handlePointerMove}
@@ -1136,7 +1150,7 @@ export default function WorkspaceCanvas({
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
       handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit, onGenerate,
-      inlineAlts]);
+      inlineAlts, mergeCandidate]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
@@ -1386,7 +1400,44 @@ export default function WorkspaceCanvas({
             return renderFragment(f, zone);
           })}
 
-          {/* Merge spinner overlay */}
+          {/* Merge preview (Experiment C v2) — during the merge-candidate
+              hold, render an approximate continuous-prose preview of the
+              two fragments laid out as one paragraph. It fades in as the
+              hold timer counts up, while the two source fragments fade
+              out (handled in renderFragment). The actual merge fires on
+              commit via /api/tree/merge and Claude produces the final
+              edited text — this preview is the visual deformation that
+              answers the 'fragments deform as they approach' part of
+              the vision. */}
+          {mergeCandidate && positions[mergeCandidate.targetId] && positions[mergeCandidate.draggedId] && (() => {
+            const targetFrag = ws.fragments[mergeCandidate.targetId];
+            const sourceFrag = ws.fragments[mergeCandidate.draggedId];
+            if (!targetFrag || !sourceFrag) return null;
+            // Anchor the preview at the upper of the two fragments so it
+            // visually "absorbs" both. Order: prefer the target's slot
+            // since the merge inherits target position.
+            const targetPos = positions[mergeCandidate.targetId];
+            const sourcePos = positions[mergeCandidate.draggedId];
+            const x = Math.min(targetPos.x, sourcePos.x);
+            const y = Math.min(targetPos.y, sourcePos.y);
+            return (
+              <MergePreview
+                x={x}
+                y={y}
+                width={nodeWidth}
+                sourceContent={sourceFrag.content}
+                targetContent={targetFrag.content}
+                mergeType={mergeCandidate.mergeType}
+                startedAt={mergeCandidate.startedAt}
+                durationMs={2000}
+                confirmed={mergeCandidate.confirmed}
+              />
+            );
+          })()}
+
+          {/* Merge spinner overlay (counts the hold time, color-coded by
+              merge variant). Lives on top of the preview so the timer is
+              still readable. */}
           {mergeCandidate && positions[mergeCandidate.targetId] && (
             <MergeSpinner
               x={positions[mergeCandidate.targetId].x}
