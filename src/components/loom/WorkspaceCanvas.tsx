@@ -29,6 +29,7 @@ interface WorkspaceCanvasProps {
   onEdit: (fragmentId: string, content: string) => void;
   onGenerate: (parentFragmentId: string) => Promise<{ alternatives: string[] } | null> | void;
   onCommitExtend?: (parentFragmentId: string, content: string) => Promise<void> | void;
+  onUnmerge?: (mergedFragmentId: string) => Promise<void> | void;
   onReplace: (
     fragmentId: string,
     selectedText: string,
@@ -51,6 +52,8 @@ const NODE_WIDTH_SUMMARY = 320;
 const NODE_WIDTH_COMPACT = 200;
 const NODE_WIDTH_DOT = 24;
 const STAGE_X_OFFSET = 600;
+const MERGE_HOLD_MS = 4000;
+const MERGE_LLM_ETA_MS = 9000; // empirical typical wall time for /api/tree/merge
 
 // Zoom thresholds: viewport zoom → semantic level
 function getSemanticZoom(viewportZoom: number): SemanticZoom {
@@ -67,6 +70,36 @@ function getNodeWidth(sz: SemanticZoom): number {
     case "compact": return NODE_WIDTH_COMPACT;
     case "dot": return NODE_WIDTH_DOT;
   }
+}
+
+// Inline progress for fragments in `generating` status. Merged
+// fragments get a live countdown ("merging… 2.1s · ~9s") since the
+// LLM merge can take 5–15s and the writer wants to know the wait.
+// Other generating fragments fall back to the original italic
+// "generating…" placeholder.
+function MergeOrGenerateProgress({ fragment }: { fragment: Fragment }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => force((n) => n + 1), 200);
+    return () => clearInterval(id);
+  }, []);
+  const isMerge = fragment.provenance.type === "merged";
+  const startedAtIso = fragment.timing?.startedAt;
+  const startedAt = startedAtIso ? new Date(startedAtIso).getTime() : null;
+  const elapsed = startedAt ? (Date.now() - startedAt) / 1000 : null;
+  const eta = isMerge ? 9 : 12;
+  if (!isMerge) return <div className="text-stone-500 italic">generating…</div>;
+  return (
+    <div className="flex items-center gap-2 text-stone-400 italic">
+      <span className="inline-block w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
+      <span>merging…</span>
+      {elapsed !== null && (
+        <span className="text-[11px] tabular-nums text-stone-500">
+          {elapsed.toFixed(1)}s · ~{eta}s
+        </span>
+      )}
+    </div>
+  );
 }
 
 // Tiny floating badge for the inline phrase reroll. Pending: spinner +
@@ -287,6 +320,7 @@ export default function WorkspaceCanvas({
   onReplace,
   onCommitPhraseEdit,
   onCommitExtend,
+  onUnmerge,
   onSubmitMessage,
   onSelectFragment,
   onRefresh,
@@ -834,11 +868,14 @@ export default function WorkspaceCanvas({
   const handleSend = useCallback(() => { if (!inputText.trim()) return; onSubmitMessage(inputText.trim()); setInputText(""); }, [inputText, onSubmitMessage]);
 
 
-  // Merge candidate timer: confirm after 2 seconds of continuous overlap
+  // Merge candidate timer: confirm after 4 seconds of continuous overlap.
+  // 2s was too quick — accidental drag-throughs were triggering merges
+  // before the writer signalled intent. 4s gives a deliberate pause
+  // matching the visual deformation timing.
   useEffect(() => {
     if (!mergeCandidate || mergeCandidate.confirmed) return;
     const elapsed = Date.now() - mergeCandidate.startedAt;
-    const remaining = 2000 - elapsed;
+    const remaining = MERGE_HOLD_MS - elapsed;
     if (remaining <= 0) {
       setMergeCandidate((prev) => prev ? { ...prev, confirmed: true } : null);
       return;
@@ -1058,6 +1095,15 @@ export default function WorkspaceCanvas({
             {zone === "stage" && (
               <button onClick={(e) => { e.stopPropagation(); onZoneTransfer(f.id, "workspace"); }} className="text-[10px] px-1 text-amber-600 hover:text-amber-400">unstage</button>
             )}
+            {f.provenance.type === "merged" && onUnmerge && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onUnmerge(f.id); }}
+                className="text-[10px] px-1 text-rose-500 hover:text-rose-300"
+                title="Restore the two original fragments and remove this merged result"
+              >
+                ↶ unmerge
+              </button>
+            )}
           </div>
         </div>
 
@@ -1076,7 +1122,7 @@ export default function WorkspaceCanvas({
               </button>
             </div>
           ) : isGen ? (
-            <div className="text-stone-500 italic">generating…</div>
+            <MergeOrGenerateProgress fragment={f} />
           ) : f.status === "error" ? (
             <div className="text-red-400 text-xs">Error: {f.error || "failed"}</div>
           ) : enableWordLevel ? (
@@ -1164,7 +1210,7 @@ export default function WorkspaceCanvas({
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
       handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit, onGenerate,
-      inlineAlts, mergeCandidate]);
+      inlineAlts, mergeCandidate, onUnmerge]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
@@ -1443,7 +1489,7 @@ export default function WorkspaceCanvas({
                 targetContent={targetFrag.content}
                 mergeType={mergeCandidate.mergeType}
                 startedAt={mergeCandidate.startedAt}
-                durationMs={2000}
+                durationMs={MERGE_HOLD_MS}
                 confirmed={mergeCandidate.confirmed}
               />
             );
@@ -1459,7 +1505,7 @@ export default function WorkspaceCanvas({
               nodeWidth={nodeWidth}
               nodeHeight={nodeH}
               startedAt={mergeCandidate.startedAt}
-              durationMs={2000}
+              durationMs={MERGE_HOLD_MS}
               mergeType={mergeCandidate.mergeType}
               confirmed={mergeCandidate.confirmed}
             />

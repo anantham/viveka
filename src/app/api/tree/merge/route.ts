@@ -56,11 +56,15 @@ export async function POST(req: NextRequest) {
   const sourceContent = sourceFrag.content;
   const targetContent = targetFrag.content;
 
-  // Create pending merged fragment
+  // Create pending merged fragment. Mark timing.startedAt eagerly so the
+  // frontend can show a live countdown on the still-generating fragment
+  // until Claude's response arrives.
+  const startedAtIso = new Date().toISOString();
   const mergedFrag = addFragment(ws, "", {
     type: "merged",
     sourceFragmentIds: [sourceId, targetId],
   }, "generating");
+  mergedFrag.timing = { startedAt: startedAtIso, completedAt: "", durationMs: 0 };
 
   // Add derivation edges
   addEdge(ws, sourceId, mergedFrag.id, "derived");
@@ -118,17 +122,32 @@ export async function POST(req: NextRequest) {
   delete ws.canvasPositions[targetId];
 
   // Hide both input fragments after the merge while keeping lineage via derived edges.
+  // Stash originals in previousVersions so an unmerge endpoint can restore them.
+  sourceFrag.previousVersions.push(sourceFrag.content);
+  targetFrag.previousVersions.push(targetFrag.content);
   sourceFrag.status = "pending";
   sourceFrag.content = `[merged into ${mergedFrag.id}]`;
   targetFrag.status = "pending";
   targetFrag.content = `[merged into ${mergedFrag.id}]`;
 
-  // Log operation
+  // Log operation. Capture pre-merge sequence indices so unmerge can
+  // attempt to restore originals to roughly where they came from.
+  const preSourceSeqIdx = ws.sequence.indexOf(sourceId);
+  const preTargetSeqIdx = ws.sequence.indexOf(targetId);
   ws.opLog.push({
     type: "merge",
     sourceIds: [sourceId, targetId],
     resultId: mergedFrag.id,
-    timestamp: new Date().toISOString(),
+    timestamp: startedAtIso,
+    // for undo
+    preMergeSnapshot: {
+      sourceWasInSequence: sourceInSequence,
+      targetWasInSequence: targetInSequence,
+      sourceWasInStage: sourceInStage,
+      targetWasInStage: targetInStage,
+      preSourceSeqIdx,
+      preTargetSeqIdx,
+    },
   });
 
   saveWorkspace(ws);

@@ -78,7 +78,21 @@ export type Operation =
   | { type: "ai-generated"; fragmentId: string; model: string; prompt: string; params: GenerationParams; timestamp: string }
   | { type: "split"; sourceFragmentId: string; charStart: number; charEnd: number; resultIds: string[]; timestamp: string }
   | { type: "move"; fragmentId: string; fromIndex: number; toIndex: number; timestamp: string }
-  | { type: "merge"; sourceIds: string[]; resultId: string; timestamp: string }
+  | {
+      type: "merge";
+      sourceIds: string[];
+      resultId: string;
+      timestamp: string;
+      preMergeSnapshot?: {
+        sourceWasInSequence: boolean;
+        targetWasInSequence: boolean;
+        sourceWasInStage: boolean;
+        targetWasInStage: boolean;
+        preSourceSeqIdx: number;
+        preTargetSeqIdx: number;
+      };
+    }
+  | { type: "unmerge"; mergedId: string; restoredIds: string[]; timestamp: string }
   | { type: "prune"; fragmentId: string; timestamp: string }
   | { type: "restore"; fragmentId: string; timestamp: string }
   | { type: "zone-transfer"; fragmentId: string; from: "workspace" | "stage"; to: "workspace" | "stage"; timestamp: string }

@@ -400,6 +400,19 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     }
   };
 
+  // Reverse a merge — restores the source fragments' originals (from
+  // their previousVersions stash that the merge endpoint preserved)
+  // and removes the merged fragment.
+  const handleUnmerge = async (mergedId: string) => {
+    console.log(`[viveka-ui] unmerge merged fragment ${mergedId.slice(0, 8)}`);
+    await fetch("/api/tree/unmerge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ treeId: tree.id, nodeId: mergedId, mergedId }),
+    });
+    await refreshTree();
+  };
+
   // Commit the chosen continuation as a single new child fragment.
   // No siblings are created — only the selected one persists.
   const handleCommitExtend = async (parentFragmentId: string, content: string) => {
@@ -624,6 +637,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           onReplace={handleReplace}
           onCommitPhraseEdit={handleCommitPhraseEdit}
           onCommitExtend={handleCommitExtend}
+          onUnmerge={handleUnmerge}
           onSubmitMessage={sendUserMessage}
           onSelectFragment={async (fragId) => {
             await fetch("/api/tree/zone", {
@@ -779,6 +793,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               onReplace={handleReplace}
               onCommitPhraseEdit={handleCommitPhraseEdit}
               onCommitExtend={handleCommitExtend}
+              onUnmerge={handleUnmerge}
               onSubmitMessage={sendUserMessage}
               onSelectFragment={async (fragId) => {
                 // Add unplaced fragment to sequence
