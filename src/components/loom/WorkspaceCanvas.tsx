@@ -435,6 +435,48 @@ export default function WorkspaceCanvas({
   }), [basePositions, physicsPositions, manualPositions]);
 
   // -----------------------------------------------------------------------
+  // Proximity pairs (Experiment B): pairs of visible fragments within r_flow.
+  // Visual gradient cue showing two fragments "want to flow together" — the
+  // first phase transition before the merge gesture fires. Pure render
+  // signal; no physics or layout change here. Continuous-feeling proximity
+  // is what the vision asked for over discrete snap.
+  // -----------------------------------------------------------------------
+
+  const R_FLOW = 280;   // canvas-coord distance below which a pair is "in flow"
+  const R_MERGE = 90;   // canvas-coord distance below which the merge gesture
+                        // is essentially primed (handled separately by physics
+                        // collision-merge; this is just a visual threshold).
+
+  const proximityPairs = useMemo(() => {
+    const ids = allVisible.map((f) => f.id);
+    const pairs: { a: string; b: string; dist: number; intensity: number }[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = positions[ids[i]];
+        const b = positions[ids[j]];
+        if (!a || !b) continue;
+        // Distance between fragment centers (use width/2, h/2 for centering)
+        const fA = ws.fragments[ids[i]];
+        const fB = ws.fragments[ids[j]];
+        if (!fA || !fB) continue;
+        const cx_a = a.x + nodeWidth / 2;
+        const cy_a = a.y + heightFor(fA) / 2;
+        const cx_b = b.x + nodeWidth / 2;
+        const cy_b = b.y + heightFor(fB) / 2;
+        const dx = cx_a - cx_b;
+        const dy = cy_a - cy_b;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < R_FLOW) {
+          // intensity: 0 at r_flow boundary, 1 at r_merge or closer
+          const intensity = Math.min(1, Math.max(0, (R_FLOW - dist) / (R_FLOW - R_MERGE)));
+          pairs.push({ a: ids[i], b: ids[j], dist, intensity });
+        }
+      }
+    }
+    return pairs;
+  }, [allVisible, positions, nodeWidth, heightFor, ws.fragments]);
+
+  // -----------------------------------------------------------------------
   // Bounding box of all visible content (in canvas-content coordinates)
   // -----------------------------------------------------------------------
 
@@ -882,13 +924,81 @@ export default function WorkspaceCanvas({
           transform: `translate(${panZoom.panX}px, ${panZoom.panY}px) scale(${panZoom.zoom})`,
           transformOrigin: "0 0",
         }}>
-          {/* SVG edges */}
+          {/* SVG edges + proximity gradient */}
           <svg className="absolute top-0 left-0 pointer-events-none" style={{ overflow: "visible", width: 1, height: 1 }}>
             <defs>
               <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
                 <polygon points="0 0, 8 3, 0 6" fill="rgba(168, 162, 158, 0.4)" />
               </marker>
             </defs>
+
+            {/* Proximity gradient (Experiment B): ambient teal connection
+                between fragment pairs within r_flow. Two layered strokes —
+                a thick blurred halo and a thin solid core — so that
+                low-intensity pairs read as a soft glow and high-intensity
+                pairs read as a confident bond. The visual cue grows with
+                closeness; the merge gesture (Experiment C) fires when the
+                bond is strong. */}
+            {proximityPairs.map((p, i) => {
+              const posA = positions[p.a];
+              const posB = positions[p.b];
+              const fA = ws.fragments[p.a];
+              const fB = ws.fragments[p.b];
+              if (!posA || !posB || !fA || !fB) return null;
+              const hA = heightFor(fA);
+              const hB = heightFor(fB);
+              // Connect the closer pair of edges along the dominant axis so
+              // the line emerges from the silhouettes rather than crossing
+              // the bodies of both fragments.
+              const cAx = posA.x + nodeWidth / 2;
+              const cAy = posA.y + hA / 2;
+              const cBx = posB.x + nodeWidth / 2;
+              const cBy = posB.y + hB / 2;
+              const dx = cBx - cAx;
+              const dy = cBy - cAy;
+              let x1: number, y1: number, x2: number, y2: number;
+              if (Math.abs(dy) > Math.abs(dx)) {
+                // Vertical orientation — connect bottom of upper to top of lower
+                if (dy > 0) {
+                  x1 = cAx; y1 = posA.y + hA;
+                  x2 = cBx; y2 = posB.y;
+                } else {
+                  x1 = cAx; y1 = posA.y;
+                  x2 = cBx; y2 = posB.y + hB;
+                }
+              } else {
+                // Horizontal orientation — connect right of left to left of right
+                if (dx > 0) {
+                  x1 = posA.x + nodeWidth; y1 = cAy;
+                  x2 = posB.x; y2 = cBy;
+                } else {
+                  x1 = posA.x; y1 = cAy;
+                  x2 = posB.x + nodeWidth; y2 = cBy;
+                }
+              }
+              const haloOpacity = 0.05 + 0.35 * p.intensity;
+              const coreOpacity = 0.20 + 0.55 * p.intensity;
+              const haloWidth = 6 + p.intensity * 10;
+              const coreWidth = 0.8 + p.intensity * 2.0;
+              return (
+                <g key={`prox-${i}`}>
+                  <line
+                    x1={x1} y1={y1} x2={x2} y2={y2}
+                    stroke={`rgba(94, 234, 212, ${haloOpacity})`}
+                    strokeWidth={haloWidth}
+                    strokeLinecap="round"
+                  />
+                  <line
+                    x1={x1} y1={y1} x2={x2} y2={y2}
+                    stroke={`rgba(167, 243, 208, ${coreOpacity})`}
+                    strokeWidth={coreWidth}
+                    strokeDasharray={p.intensity > 0.5 ? undefined : `${4 + p.intensity * 6} ${4}`}
+                    strokeLinecap="round"
+                  />
+                </g>
+              );
+            })}
+
             {edgeElements}
           </svg>
 
