@@ -437,9 +437,10 @@ export default function WorkspaceCanvas({
   // whenever the workspace id changes (open a different workspace).
   const hasAutoFitForWorkspaceRef = useRef<string | null>(null);
 
-  // Semantic zoom level derived from viewport zoom
+  // Semantic zoom level derived from viewport zoom (used for visual
+  // rendering only — layout/physics use canonical FULL-level dimensions
+  // declared further down).
   const semanticZoom = getSemanticZoom(panZoom.zoom);
-  const nodeWidth = getNodeWidth(semanticZoom);
 
   // -----------------------------------------------------------------------
   // Derived data
@@ -511,21 +512,32 @@ export default function WorkspaceCanvas({
   // Layout: dagre for sequence, offset for stage/unplaced
   // -----------------------------------------------------------------------
 
-  // Fallback height used by edge geometry and a few other callsites that
-  // still want a single number. Per-fragment height (for layout + physics)
-  // goes through heightFor, which prefers actually-measured DOM heights
-  // over the content-length estimator. The estimator is a cold-start; once
-  // a fragment renders, ResizeObserver below reports its real height and
-  // subsequent layouts use that.
-  const nodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 44 : 96;
+  // Layout/physics always work in canonical FULL-level coordinate space,
+  // regardless of the current viewport zoom. This decouples physics from
+  // semantic-zoom transitions — crossing a zoom threshold (compact→summary
+  // at 45%, summary→full at 80%) used to change nodeWidth/heightFor and
+  // yank every fragment toward new dagre targets, which in turn made the
+  // bbox-overlap force violently rebalance. With layout in canonical
+  // space, semantic zoom is purely a visual operation — pan/zoom CSS
+  // transform handles the apparent shrink, no physics is triggered.
+  //
+  // The visualNodeWidth / visualNodeH below are used only for rendering
+  // (card width at compact/summary/dot levels, edge geometry).
+  const nodeWidth = NODE_WIDTH_FULL;
+  const nodeH = 96;
+  const visualNodeWidth = getNodeWidth(semanticZoom);
+  const visualNodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 44 : 96;
+
   const [measuredHeights, setMeasuredHeights] = useState<Record<string, number>>({});
   const heightFor = useCallback(
     (f: Fragment) => {
       const measured = measuredHeights[f.id];
       if (measured && measured > 12) return measured;
-      return estimateFragmentHeight(f.content, semanticZoom);
+      // Always estimate at FULL level so layout doesn't shrink/grow
+      // when the writer changes zoom.
+      return estimateFragmentHeight(f.content, "full");
     },
-    [semanticZoom, measuredHeights]
+    [measuredHeights]
   );
 
   // ResizeObserver: every rendered fragment reports its actual height.

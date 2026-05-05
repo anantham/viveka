@@ -74,9 +74,15 @@ export const EDGE_REST_EXTRA = 60; // extra gap beyond node heights
 export const DAMPING = 0.88;
 export const SLEEP_THRESHOLD = 0.5;
 
-// Merge collision
+// Merge collision — bbox-overlap based. The dragged fragment becomes a
+// merge candidate against any other whose bbox intersects with it by at
+// least MERGE_OVERLAP_MIN px in BOTH dimensions. Center-distance is
+// only used as a tiebreaker when multiple targets overlap.
+export const MERGE_OVERLAP_MIN = 50;
+export const MERGE_HYSTERESIS_MIN = 10; // must drop below this overlap to cancel
+// Kept for backward compatibility with any tests that import it.
 export const MERGE_OVERLAP_DIST = 30;
-export const MERGE_HYSTERESIS = 50; // must move this far away to cancel
+export const MERGE_HYSTERESIS = 50;
 
 // How often to flush positions to React state during active simulation
 const RENDER_FLUSH_INTERVAL = 3; // every N frames
@@ -117,8 +123,12 @@ export function simulateTick(
   //        have centers 400px apart while their boxes still overlap).
   //    (b) Center-distance repulsion as before — keeps the field gentle
   //        in the non-overlap regime.
-  const BBOX_OVERLAP_FORCE = 1.4;
-  const BBOX_OVERLAP_PADDING = 12;
+  // Bbox-overlap repulsion at rest. Keeps fragments from stacking on
+  // each other. Force is intentionally gentle — too strong and the
+  // canvas thrashes when multiple fragments are crowded; the goal is
+  // a slow drift apart, not a violent pop.
+  const BBOX_OVERLAP_FORCE = 0.35;
+  const BBOX_OVERLAP_PADDING = 8;
   for (let i = 0; i < n; i++) {
     const a = particles[i];
     const sizeA = nodeSize(a.id);
@@ -308,7 +318,9 @@ export function usePhysicsSimulation(opts: UsePhysicsSimulationOptions): UsePhys
     const particleArray = Array.from(particles.values());
     const totalKE = simulateTick(particleArray, effectiveDagre, currentEdges, getSize);
 
-    // 5. Collision detection for merge (only when dragging)
+    // 5. Collision detection for merge (only when dragging). Picks the
+    // candidate with the deepest bbox-overlap; merge fires when overlap
+    // in BOTH dimensions exceeds MERGE_OVERLAP_MIN.
     if (currentPinnedId && currentPinnedPos) {
       const draggedP = particles.get(currentPinnedId);
       if (draggedP) {
@@ -316,22 +328,29 @@ export function usePhysicsSimulation(opts: UsePhysicsSimulationOptions): UsePhys
         const dcx = draggedP.x + draggedSize.w / 2;
         const dcy = draggedP.y + draggedSize.h / 2;
         let closestId: string | null = null;
-        let closestDist = Infinity;
+        let bestOverlap = 0;     // min(overlapX, overlapY) of best target
+        let closestDist = Infinity; // center distance to the best target (for angle)
 
         for (const [id, p] of particles) {
           if (id === currentPinnedId) continue;
           const s = getSize(id);
           const cx = p.x + s.w / 2;
           const cy = p.y + s.h / 2;
-          const dist = Math.sqrt((dcx - cx) ** 2 + (dcy - cy) ** 2);
-          if (dist < closestDist) {
-            closestDist = dist;
+          const dx = dcx - cx;
+          const dy = dcy - cy;
+          const overlapX = (draggedSize.w / 2 + s.w / 2) - Math.abs(dx);
+          const overlapY = (draggedSize.h / 2 + s.h / 2) - Math.abs(dy);
+          if (overlapX <= 0 || overlapY <= 0) continue;
+          const overlap = Math.min(overlapX, overlapY);
+          if (overlap > bestOverlap) {
+            bestOverlap = overlap;
             closestId = id;
+            closestDist = Math.sqrt(dx * dx + dy * dy);
           }
         }
 
         const tracking = mergeTrackingRef.current;
-        if (closestId && closestDist < MERGE_OVERLAP_DIST) {
+        if (closestId && bestOverlap >= MERGE_OVERLAP_MIN) {
           if (!tracking || tracking.targetId !== closestId) {
             mergeTrackingRef.current = { targetId: closestId, startedAt: Date.now() };
           }
@@ -348,7 +367,9 @@ export function usePhysicsSimulation(opts: UsePhysicsSimulationOptions): UsePhys
             targetId: closestId,
             angle,
           });
-        } else if (tracking && closestDist > MERGE_HYSTERESIS) {
+        } else if (tracking && bestOverlap < MERGE_HYSTERESIS_MIN) {
+          // Pulled apart far enough that overlap dropped below the
+          // hysteresis threshold — cancel the merge candidate.
           mergeTrackingRef.current = null;
           onMergeCancelledRef.current?.();
         }

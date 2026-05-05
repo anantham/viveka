@@ -63,8 +63,13 @@ export default function WordLevelContent({
     const words: PositionedWord[] = [];
     let wordIndex = 0;
     
-    // Get word segment info from prepared text
-    const segmentInfo = prepared.segments.filter(s => s.content.trim().length > 0);
+    // Get word segment info from prepared text. Defensive against
+    // segments that lack a content string (some Pretext outputs return
+    // separator/whitespace segments with no content field) — those
+    // would crash on .trim() and take the whole canvas down.
+    const segmentInfo = prepared.segments.filter(
+      (s) => typeof s?.content === "string" && s.content.trim().length > 0
+    );
     
     lines.forEach((line, lineIndex) => {
       const lineY = lineIndex * LINE_HEIGHT;
