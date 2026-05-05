@@ -1031,13 +1031,13 @@ export default function WorkspaceCanvas({
       return (
         <g key={`edge-${i}`}>
           <line x1={x1} y1={y1} x2={x2} y2={y2}
-            stroke={isActive ? "rgba(168, 162, 158, 0.4)" : "rgba(168, 162, 158, 0.15)"}
-            strokeWidth={isActive ? 2 : 1}
-            strokeDasharray={isActive ? "none" : "4 4"}
+            stroke={isActive ? "rgba(168, 162, 158, 0.18)" : "rgba(168, 162, 158, 0.06)"}
+            strokeWidth={isActive ? 1 : 0.6}
+            strokeDasharray={isActive ? "none" : "3 6"}
             markerEnd={semanticZoom !== "dot" ? "url(#arrowhead)" : undefined}
           />
           {semanticZoom !== "dot" && (
-            <text x={mx} y={my - 6} textAnchor="middle" fill="rgba(168, 162, 158, 0.5)" fontSize="10">
+            <text x={mx} y={my - 6} textAnchor="middle" fill="rgba(168, 162, 158, 0.22)" fontSize="10">
               {lbl}
             </text>
           )}
@@ -1097,7 +1097,7 @@ export default function WorkspaceCanvas({
           <svg className="absolute top-0 left-0 pointer-events-none" style={{ overflow: "visible", width: 1, height: 1 }}>
             <defs>
               <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-                <polygon points="0 0, 8 3, 0 6" fill="rgba(168, 162, 158, 0.4)" />
+                <polygon points="0 0, 8 3, 0 6" fill="rgba(168, 162, 158, 0.18)" />
               </marker>
             </defs>
 
@@ -1153,11 +1153,13 @@ export default function WorkspaceCanvas({
                 ((mergeCandidate.draggedId === p.a && mergeCandidate.targetId === p.b) ||
                  (mergeCandidate.draggedId === p.b && mergeCandidate.targetId === p.a));
 
+              // Ambient pairs are atmospheric — barely-there glow.
+              // Merge-candidate pair gets a confident bond.
               const intensity = isMergeCandidate ? 1 : p.intensity;
-              const haloOpacity = (isMergeCandidate ? 0.20 : 0.05) + (isMergeCandidate ? 0.45 : 0.35) * intensity;
-              const coreOpacity = (isMergeCandidate ? 0.55 : 0.20) + (isMergeCandidate ? 0.40 : 0.55) * intensity;
-              const haloWidth = (isMergeCandidate ? 12 : 6) + intensity * (isMergeCandidate ? 16 : 10);
-              const coreWidth = (isMergeCandidate ? 1.5 : 0.8) + intensity * (isMergeCandidate ? 3.0 : 2.0);
+              const haloOpacity = (isMergeCandidate ? 0.16 : 0.02) + (isMergeCandidate ? 0.30 : 0.12) * intensity;
+              const coreOpacity = (isMergeCandidate ? 0.45 : 0.06) + (isMergeCandidate ? 0.30 : 0.18) * intensity;
+              const haloWidth = (isMergeCandidate ? 12 : 4) + intensity * (isMergeCandidate ? 16 : 8);
+              const coreWidth = (isMergeCandidate ? 1.5 : 0.6) + intensity * (isMergeCandidate ? 3.0 : 1.4);
               const haloRgb = isMergeCandidate ? MERGE_COLORS_RGB[mergeCandidate.mergeType] : "94, 234, 212";
               const coreRgb = isMergeCandidate ? MERGE_COLORS_RGB[mergeCandidate.mergeType] : "167, 243, 208";
 

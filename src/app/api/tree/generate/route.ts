@@ -13,19 +13,28 @@ import { Session } from "@/lib/types";
 
 /**
  * Generate N assistant completions for a given parent fragment.
- * Fires N parallel LLM calls and returns immediately with pending fragment IDs.
- * Completions fill in lazily (poll /api/tree/get to see updates).
+ *
+ * Default mode (ephemeral=false): fires N parallel LLM calls and returns
+ * immediately with pending fragment IDs that fill in lazily as each
+ * completion arrives. Caller polls /api/tree/get for updates.
+ *
+ * Ephemeral mode (ephemeral=true): waits for all N parallel completions
+ * to finish, returns just the alternative continuation strings — no
+ * fragments are created. The frontend renders alternatives inline and
+ * commits the chosen one via /api/tree/append-child. This is the
+ * "in-place extend preview" pattern, mirror of reroll-phrase ephemeral.
  */
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { treeId, parentId, count, userMessage } = body as {
+  const { treeId, parentId, count, userMessage, ephemeral } = body as {
     treeId: string;
     parentId: string;
     count?: number;
     userMessage?: string;
+    ephemeral?: boolean;
   };
 
-  console.log(`[generate] request: treeId=${treeId?.slice(0, 8)} parentId=${parentId?.slice(0, 8)} count=${count} userMsg=${userMessage ? userMessage.slice(0, 50) + "..." : "none"}`);
+  console.log(`[generate] request: treeId=${treeId?.slice(0, 8)} parentId=${parentId?.slice(0, 8)} count=${count} userMsg=${userMessage ? userMessage.slice(0, 50) + "..." : "none"} ephemeral=${ephemeral ?? false}`);
 
   const ws = getWorkspace(treeId);
   if (!ws) return NextResponse.json({ error: "Tree not found" }, { status: 404 });
@@ -95,7 +104,54 @@ export async function POST(req: NextRequest) {
   const historyTokenEst = modelHistory.reduce((s, h) => s + h.content.length, 0);
   console.log(`[generate] firing ${n} parallel completions | model=${model} | history=${modelHistory.length} msgs (~${historyTokenEst} chars) | prompt="${promptMessage.slice(0, 80)}..."`);
 
-  // Fire N parallel completions (don't await)
+  // Ephemeral path: wait for all completions, return strings, NO fragments created.
+  if (ephemeral) {
+    // Roll back the pending fragments we eagerly added — in ephemeral mode
+    // we don't want them to persist.
+    const freshWs = getWorkspace(treeId);
+    if (freshWs) {
+      for (const fragId of pendingFragments) {
+        delete freshWs.fragments[fragId];
+      }
+      freshWs.edges = freshWs.edges.filter(
+        (e) => !pendingFragments.includes(e.from) && !pendingFragments.includes(e.to)
+      );
+      saveWorkspace(freshWs);
+    }
+
+    const results = await Promise.all(
+      Array.from({ length: n }, async (_, i) => {
+        const startMs = Date.now();
+        try {
+          const response = await queryClaudeCode(
+            promptMessage,
+            systemPrompt,
+            modelHistory,
+            { model, noTools: true }
+          );
+          console.log(`[generate ephemeral] alt ${i + 1}/${n} done in ${Date.now() - startMs}ms (${response.text.length} chars)`);
+          return response.text.trim();
+        } catch (err) {
+          console.error(`[generate ephemeral] alt ${i + 1}/${n} failed:`, err);
+          return null;
+        }
+      })
+    );
+    const alternatives = Array.from(
+      new Set(
+        results
+          .filter((r): r is string => !!r && r.length > 0)
+      )
+    );
+    console.log(`[generate ephemeral] returning ${alternatives.length} alternatives`);
+    return NextResponse.json({
+      alternatives,
+      status: "complete",
+      message: `${alternatives.length} continuations`,
+    });
+  }
+
+  // Persisted path: fire N parallel completions (don't await), fragments fill in lazily.
   Promise.all(
     pendingFragments.map(async (fragId, i) => {
       const startedAt = new Date().toISOString();
