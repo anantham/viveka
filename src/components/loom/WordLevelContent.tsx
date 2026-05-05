@@ -96,7 +96,14 @@ export default function WordLevelContent({
     });
 
     setPositionedWords(words);
-  }, [prepared, containerWidth, obstacles]);
+    // NOTE: `obstacles` is intentionally NOT a dep here — it defaults to
+    // `[]` which is a new array reference every render. Including it in
+    // deps caused an infinite setState loop. The layout doesn't actually
+    // use obstacles yet (they only render as debug rectangles below);
+    // when the obstacle-aware Pretext layout lands, we'll memoize the
+    // prop or compare-by-content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prepared, containerWidth]);
 
   // Native drag handlers
   const handleDragStart = (e: React.DragEvent, wordIndex: number) => {
@@ -140,7 +147,13 @@ export default function WordLevelContent({
     setDropTargetIndex(null);
   };
 
-  if (!isClient || !prepared || positionedWords.length === 0) {
+  // Bail out and render plain text if anything in the layout produced
+  // a NaN/Infinity coordinate. Otherwise React commits an absolute
+  // positioned span with `left: NaN` and the canvas crashes.
+  const hasBadCoords = positionedWords.some(
+    (w) => !Number.isFinite(w.x) || !Number.isFinite(w.y) || !Number.isFinite(w.width)
+  );
+  if (!isClient || !prepared || positionedWords.length === 0 || hasBadCoords) {
     return <div className="whitespace-pre-wrap">{content}</div>;
   }
 
