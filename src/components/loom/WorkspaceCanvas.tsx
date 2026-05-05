@@ -453,12 +453,63 @@ export default function WorkspaceCanvas({
 
   // Fallback height used by edge geometry and a few other callsites that
   // still want a single number. Per-fragment height (for layout + physics)
-  // goes through estimateFragmentHeight.
+  // goes through heightFor, which prefers actually-measured DOM heights
+  // over the content-length estimator. The estimator is a cold-start; once
+  // a fragment renders, ResizeObserver below reports its real height and
+  // subsequent layouts use that.
   const nodeH = semanticZoom === "dot" ? 24 : semanticZoom === "compact" ? 44 : 96;
+  const [measuredHeights, setMeasuredHeights] = useState<Record<string, number>>({});
   const heightFor = useCallback(
-    (f: Fragment) => estimateFragmentHeight(f.content, semanticZoom),
-    [semanticZoom]
+    (f: Fragment) => {
+      const measured = measuredHeights[f.id];
+      if (measured && measured > 12) return measured;
+      return estimateFragmentHeight(f.content, semanticZoom);
+    },
+    [semanticZoom, measuredHeights]
   );
+
+  // ResizeObserver: every rendered fragment reports its actual height.
+  // We index by data-fragment-id (set on each fragment's outer div).
+  // Updates are coalesced and only trigger a state change when the
+  // measured height drifts by >4px from the last recorded value, to
+  // avoid feedback loops with the layout engines.
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      setMeasuredHeights((prev) => {
+        let next: Record<string, number> | null = null;
+        for (const entry of entries) {
+          const el = entry.target as HTMLElement;
+          const id = el.dataset.fragmentId;
+          if (!id) continue;
+          const h = entry.contentRect.height;
+          if (h < 12) continue;
+          if (Math.abs((prev[id] ?? 0) - h) > 4) {
+            if (!next) next = { ...prev };
+            next[id] = h;
+          }
+        }
+        return next ?? prev;
+      });
+    });
+    const observed = new Set<Element>();
+    const tick = () => {
+      const els = document.querySelectorAll<HTMLElement>("[data-fragment-id]");
+      els.forEach((el) => {
+        if (!observed.has(el)) {
+          ro.observe(el);
+          observed.add(el);
+        }
+      });
+    };
+    tick();
+    // re-scan after each render commit (new fragments might have appeared)
+    const interval = setInterval(tick, 500);
+    return () => {
+      clearInterval(interval);
+      ro.disconnect();
+    };
+  }, []);
 
   const basePositions = useMemo(() => {
     // Dagre layout for sequence fragments — per-fragment heights so tall
@@ -817,6 +868,7 @@ export default function WorkspaceCanvas({
       return (
         <div
           key={f.id}
+          data-fragment-id={f.id}
           className={`absolute rounded-full ${provenanceDotColor(f)} cursor-pointer transition-all hover:scale-150`}
           style={{ left: pos.x, top: pos.y, width: 20, height: 20, opacity: zone === "unplaced" ? 0.4 : 1 }}
           title={`${label}: ${f.content.slice(0, 80)}`}
@@ -830,6 +882,7 @@ export default function WorkspaceCanvas({
       return (
         <div
           key={f.id}
+          data-fragment-id={f.id}
           className={`absolute pl-2 pr-1 py-1 transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
           style={{ left: pos.x, top: pos.y, width: NODE_WIDTH_COMPACT, opacity: zone === "unplaced" ? 0.4 : 1 }}
           onPointerDown={(e) => handlePointerDown(e, f.id)}
@@ -852,6 +905,7 @@ export default function WorkspaceCanvas({
       return (
         <div
           key={f.id}
+          data-fragment-id={f.id}
           className={`absolute pl-3 pr-2 py-2 transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
           style={{ left: pos.x, top: pos.y, width: NODE_WIDTH_SUMMARY, opacity: zone === "unplaced" ? 0.5 : 1 }}
           onPointerDown={(e) => handlePointerDown(e, f.id)}
@@ -876,6 +930,7 @@ export default function WorkspaceCanvas({
     return (
       <div
         key={f.id}
+        data-fragment-id={f.id}
         className={`absolute cursor-default group ${stripe} ${isStaged ? "border-l-amber-600/40 border-dashed" : ""}`}
         style={{
           left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
