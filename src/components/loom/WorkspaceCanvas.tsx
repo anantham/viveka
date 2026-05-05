@@ -909,12 +909,13 @@ export default function WorkspaceCanvas({
         <div
           key={f.id}
           data-fragment-id={f.id}
-          className={`absolute pl-2 pr-1 py-1 transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
+          className={`absolute pl-2 pr-1 py-1 cursor-move transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
           style={{ left: pos.x, top: pos.y, width: NODE_WIDTH_COMPACT, opacity: zone === "unplaced" ? 0.4 : 1 }}
           onPointerDown={(e) => handlePointerDown(e, f.id)}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
+          <div aria-hidden className="absolute -inset-[10px] rounded-md hover:outline hover:outline-1 hover:outline-stone-600/40" style={{ zIndex: -1 }} />
           <div className={`text-xs font-medium truncate ${modelTextColor(f)}`}>
             {getFirstLine(f.content)}
           </div>
@@ -932,12 +933,13 @@ export default function WorkspaceCanvas({
         <div
           key={f.id}
           data-fragment-id={f.id}
-          className={`absolute pl-3 pr-2 py-2 transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
+          className={`absolute pl-3 pr-2 py-2 cursor-move transition-colors ${provenanceStripe(f)} group hover:bg-stone-900/30 rounded-r`}
           style={{ left: pos.x, top: pos.y, width: NODE_WIDTH_SUMMARY, opacity: zone === "unplaced" ? 0.5 : 1 }}
           onPointerDown={(e) => handlePointerDown(e, f.id)}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
+          <div aria-hidden className="absolute -inset-[12px] rounded-md hover:outline hover:outline-1 hover:outline-stone-600/40" style={{ zIndex: -1 }} />
           <div className="text-[10px] text-stone-500 mb-1 opacity-0 group-hover:opacity-100 transition-opacity">
             {label} {isInSequence && `·${seqIndex + 1}`}
           </div>
@@ -969,7 +971,7 @@ export default function WorkspaceCanvas({
       <div
         key={f.id}
         data-fragment-id={f.id}
-        className={`absolute cursor-default group ${stripe} ${isStaged ? "border-l-amber-600/40 border-dashed" : ""}`}
+        className={`absolute cursor-move group ${stripe} ${isStaged ? "border-l-amber-600/40 border-dashed" : ""}`}
         style={{
           left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
           zIndex: dragState?.fragmentId === f.id ? 50 : 1,
@@ -981,6 +983,18 @@ export default function WorkspaceCanvas({
         onPointerUp={handlePointerUp}
         onDoubleClick={() => startEdit(f)}
       >
+        {/* Grab halo: an invisible 14px-wide ring around the fragment that
+            extends the click target so the writer can grab the fragment
+            from a generous margin without aiming pixel-perfectly at the
+            text-vs-padding boundary. On hover it shows a faint outline so
+            the affordance is visible. The halo is a child of the
+            fragment outer div, so pointer events on it bubble to the
+            outer's onPointerDown handler. */}
+        <div
+          aria-hidden
+          className="absolute -inset-[14px] rounded-md transition-colors hover:outline hover:outline-1 hover:outline-stone-600/40"
+          style={{ zIndex: -1 }}
+        />
         {/* Inline-phrase-reroll badge — only when this fragment is the
             active source for an in-place phrase preview. Shows the live
             countdown during pending and the index/cycle hint during
