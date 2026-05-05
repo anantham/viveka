@@ -35,10 +35,11 @@ export default function DumpInterface({ initialTree }: DumpInterfaceProps) {
 
   // Load existing blocks from workspace sequence
   useEffect(() => {
+    // Get all fragments with content (includes root with title)
     const existingBlocks = tree.sequence
       .map((id) => tree.fragments[id])
-      .filter((f): f is Fragment => !!f && f.provenance.type === "human-typed" && !!f.content)
-      .map((f) => ({ id: f.id, content: f.content, timestamp: f.createdAt }));
+      .filter((f): f is Fragment => !!f && !!f.content && f.content.trim().length > 0)
+      .map((f) => ({ id: f.id, content: f.content, timestamp: f.createdAt, isRoot: f.provenance.type === "system" }));
     setBlocks(existingBlocks);
   }, [tree]);
 

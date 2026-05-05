@@ -15,6 +15,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@chenglou/pretext": "0.0.5",
     "@types/dagre": "0.7.54",
     "dagre": "0.8.5",
     "next": "^16.2.1",

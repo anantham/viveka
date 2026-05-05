@@ -80,6 +80,7 @@ function wsToLegacyTree(ws: Workspace): ConversationTree {
 }
 
 type View = "chat" | "reader" | "tree" | "split" | "canvas";
+type WordMode = "fragment" | "word";
 
 /** An entry in the node-level undo stack. Stores the content before a mutation. */
 interface UndoEntry {
@@ -106,6 +107,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   // Legacy tree shape for views that haven't migrated yet
   const tree = wsToLegacyTree(ws);
   const [view, setView] = useState<View>("split");
+  const [wordMode, setWordMode] = useState<WordMode>("fragment");
   const [input, setInput] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
@@ -571,6 +573,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           }}
           onRefresh={refreshTree}
           isGenerating={hasGenerating}
+          enableWordLevel={wordMode === "word"}
         />
         <button
           onClick={() => setFullscreen(false)}
@@ -630,6 +633,18 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               {v}
             </button>
           ))}
+          <span className="text-stone-700 text-xs">|</span>
+          <button
+            onClick={() => setWordMode((m) => m === "fragment" ? "word" : "fragment")}
+            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+              wordMode === "word"
+                ? "border-amber-500 text-amber-300"
+                : "border-stone-700 text-stone-600 hover:text-stone-400"
+            }`}
+            title="Toggle word-level editing"
+          >
+            {wordMode === "word" ? "word" : "fragment"}
+          </button>
         </div>
       </header>
 
@@ -712,6 +727,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               }}
               onRefresh={refreshTree}
               isGenerating={hasGenerating}
+              enableWordLevel={wordMode === "word"}
             />
             <button
               onClick={() => setFullscreen(true)}

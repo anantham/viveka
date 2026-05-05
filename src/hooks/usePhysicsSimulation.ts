@@ -63,9 +63,9 @@ export interface UsePhysicsSimulationReturn {
 // Constants — tuned for 10-50 nodes at 60fps
 // ---------------------------------------------------------------------------
 
-export const REPULSION_STRENGTH = 8000;
-export const MIN_DIST = 20;
-export const MAX_REPULSION_DIST = 400;
+export const REPULSION_STRENGTH = 80000;
+export const MIN_DIST = 30;
+export const MAX_REPULSION_DIST = 600;
 
 export const DAGRE_SPRING_K = 0.015;
 export const EDGE_SPRING_K = 0.08;

@@ -10,7 +10,7 @@ export default function Home() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [interfaceMode, setInterfaceMode] = useState<"linear" | "loom" | "dump">("loom");
+  const [interfaceMode, setInterfaceMode] = useState<"loom" | "dump">("loom");
 
   const handleSubmit = async (data: {
     intent: string;
@@ -51,23 +51,7 @@ export default function Home() {
         const tree = await res.json();
         router.push(`/loom/${tree.id}`);
       } else {
-        // Create a linear session
-        const res = await fetch("/api/session/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        });
-        if (!res.ok) {
-          const err = await res.json();
-          setError(err.error || "Failed to create session");
-          return;
-        }
-        const session = await res.json();
-        sessionStorage.setItem(
-          `viveka-session-${session.id}`,
-          JSON.stringify(session)
-        );
-        router.push(`/session/${session.id}`);
+        router.push(`/loom/${tree.id}`);
       }
     } catch (err) {
       setError("Failed to create session");
@@ -83,45 +67,45 @@ export default function Home() {
       <div className="fixed top-4 right-4">
         <LLMSettings />
       </div>
-      <div className="mb-8 text-center">
-        <h1 className="text-lg font-medium text-stone-400 tracking-wider mb-1">
+      <div className="mb-12 text-center">
+        <h1 className="text-2xl font-medium text-stone-300 tracking-widest mb-2">
           VIVEKA
         </h1>
-        <p className="text-xs text-stone-600">
+        <p className="text-sm text-stone-600">
           Attentional scaffolding for human-AI interaction
         </p>
       </div>
 
       {/* Interface mode toggle */}
-      <div className="flex gap-2 mb-4">
-        {(["dump", "loom", "linear"] as const).map((m) => (
+      <div className="flex gap-4 mb-8">
+        {(["dump", "loom"] as const).map((m) => (
           <button
             key={m}
             onClick={() => setInterfaceMode(m)}
-            className={`px-3 py-1 text-xs rounded border transition-colors ${
+            className={`px-6 py-3 text-base rounded-lg border transition-colors ${
               interfaceMode === m
                 ? "bg-stone-700 border-stone-500 text-stone-200"
                 : "bg-stone-800 border-stone-700 text-stone-500 hover:text-stone-400"
             }`}
           >
-            {m === "dump" ? "Dump (freeform)" : m === "loom" ? "LOOM (tree)" : "Linear (chat)"}
+            {m === "dump" ? "Dump (freeform)" : "LOOM (tree)"}
           </button>
         ))}
       </div>
 
       {interfaceMode === "dump" ? (
-        <div className="max-w-lg w-full">
-          <div className="border border-stone-700 rounded-lg p-6 space-y-4 bg-stone-900/50">
-            <h2 className="text-sm font-medium text-stone-400 uppercase tracking-wider">
+        <div className="max-w-2xl w-full">
+          <div className="border border-stone-700 rounded-lg p-8 space-y-6 bg-stone-900/50">
+            <h2 className="text-base font-medium text-stone-400 uppercase tracking-wider">
               Freeform Dump
             </h2>
-            <p className="text-xs text-stone-600">
+            <p className="text-sm text-stone-600">
               No questions. No structure. Just write. Auto-saves as you go.
             </p>
             <input
               type="text"
               placeholder="Optional title (e.g. 'bath insight about standing waves')"
-              className="w-full bg-stone-800 border border-stone-600 rounded px-3 py-2 text-sm text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+              className="w-full bg-stone-800 border border-stone-600 rounded-lg px-4 py-3 text-base text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   handleSubmit({
@@ -143,7 +127,7 @@ export default function Home() {
                 })
               }
               disabled={loading}
-              className="w-full py-2 text-sm bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 transition-colors disabled:opacity-50"
+              className="w-full py-3 text-base bg-stone-800 border border-stone-600 rounded-lg text-stone-300 hover:bg-stone-700 transition-colors disabled:opacity-50"
             >
               {loading ? "Creating..." : "Begin writing"}
             </button>

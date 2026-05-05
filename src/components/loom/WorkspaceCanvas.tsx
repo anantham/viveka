@@ -7,6 +7,7 @@ import { usePhysicsSimulation, angleToMergeType } from "@/hooks/usePhysicsSimula
 import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
 import { MergeSpinner } from "./MergeSpinner";
 import dagre from "dagre";
+import WordLevelContent from "./WordLevelContent";
 
 type MergeType = "prepend" | "append" | "interleave" | "summarize";
 
@@ -30,6 +31,7 @@ interface WorkspaceCanvasProps {
   onSelectFragment: (fragmentId: string) => void;
   onRefresh: () => void;
   isGenerating: boolean;
+  enableWordLevel?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +184,7 @@ export default function WorkspaceCanvas({
   onSelectFragment,
   onRefresh,
   isGenerating,
+  enableWordLevel = false,
 }: WorkspaceCanvasProps) {
   const [manualPositions, setManualPositions] = useState<Record<string, Position>>({});
   const [splitToolbar, setSplitToolbar] = useState<{
@@ -626,6 +629,14 @@ export default function WorkspaceCanvas({
             <div className="text-stone-500">Generating...</div>
           ) : f.status === "error" ? (
             <div className="text-red-400 text-xs">Error: {f.error || "failed"}</div>
+          ) : enableWordLevel ? (
+            <WordLevelContent
+              content={f.content}
+              onContentChange={(newContent) => {
+                onEdit(f.id, newContent);
+              }}
+              containerWidth={NODE_WIDTH_FULL - 32} // Account for padding
+            />
           ) : (
             <div data-text-content className="whitespace-pre-wrap select-text text-stone-200 cursor-text" onMouseUp={() => handleTextMouseUp(f.id, f.content)}>
               {f.content}
@@ -636,7 +647,7 @@ export default function WorkspaceCanvas({
     );
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
-      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer]);
+      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
