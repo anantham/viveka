@@ -36,8 +36,8 @@ export default function Home() {
         }
         const tree = await res.json();
         router.push(`/dump/${tree.id}`);
-      } else if (interfaceMode === "loom") {
-        // Create a tree-based session
+      } else {
+        // Create a tree-based session (loom is the only non-dump path)
         const res = await fetch("/api/tree/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -49,8 +49,6 @@ export default function Home() {
           return;
         }
         const tree = await res.json();
-        router.push(`/loom/${tree.id}`);
-      } else {
         router.push(`/loom/${tree.id}`);
       }
     } catch (err) {

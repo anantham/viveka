@@ -213,7 +213,11 @@ export default function WorkspaceCanvas({
   const lastVelocityRef = useRef<{ vx: number; vy: number }>({ vx: 0, vy: 0 });
 
   const viewportRef = useRef<HTMLDivElement>(null);
-  const { state: panZoom, containerRef, handlers: panZoomHandlers } = usePanZoom();
+  const { state: panZoom, containerRef, handlers: panZoomHandlers, fitToBox } = usePanZoom();
+
+  // Auto-fit: runs once when fragments first have positions, then again
+  // whenever the workspace id changes (open a different workspace).
+  const hasAutoFitForWorkspaceRef = useRef<string | null>(null);
 
   // Semantic zoom level derived from viewport zoom
   const semanticZoom = getSemanticZoom(panZoom.zoom);
@@ -363,6 +367,64 @@ export default function WorkspaceCanvas({
     ...physicsPositions,
     ...manualPositions,
   }), [basePositions, physicsPositions, manualPositions]);
+
+  // -----------------------------------------------------------------------
+  // Bounding box of all visible content (in canvas-content coordinates)
+  // -----------------------------------------------------------------------
+
+  const contentBbox = useMemo(() => {
+    const ids = allVisible.map((f) => f.id).filter((id) => positions[id]);
+    if (ids.length === 0) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const id of ids) {
+      const p = positions[id];
+      if (!p) continue;
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + nodeWidth);
+      maxY = Math.max(maxY, p.y + nodeH);
+    }
+    if (!isFinite(minX)) return null;
+    return { minX, minY, maxX, maxY };
+  }, [allVisible, positions, nodeWidth, nodeH]);
+
+  // -----------------------------------------------------------------------
+  // Auto-fit on workspace open
+  // -----------------------------------------------------------------------
+
+  const fitNow = useCallback(() => {
+    if (!contentBbox || !containerRef.current) return;
+    const r = containerRef.current.getBoundingClientRect();
+    fitToBox(contentBbox, { width: r.width, height: r.height }, 0.08);
+  }, [contentBbox, fitToBox, containerRef]);
+
+  useEffect(() => {
+    if (hasAutoFitForWorkspaceRef.current === ws.id) return;
+    if (!contentBbox || !containerRef.current) return;
+    const r = containerRef.current.getBoundingClientRect();
+    if (r.width < 50 || r.height < 50) return; // not laid out yet
+    fitToBox(contentBbox, { width: r.width, height: r.height }, 0.08);
+    hasAutoFitForWorkspaceRef.current = ws.id;
+  }, [ws.id, contentBbox, fitToBox, containerRef]);
+
+  // -----------------------------------------------------------------------
+  // Re-layout: clear saved positions and let dagre + physics start fresh
+  // -----------------------------------------------------------------------
+
+  const relayoutNow = useCallback(async () => {
+    setManualPositions({});
+    hasAutoFitForWorkspaceRef.current = null; // re-fit on next stabilize
+    try {
+      await fetch("/api/tree/canvas-positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ treeId: ws.id, positions: {}, replace: true }),
+      });
+    } catch {
+      /* fire-and-forget; physics will save fresh positions on its next stabilize */
+    }
+    onRefresh();
+  }, [ws.id, onRefresh]);
 
   // -----------------------------------------------------------------------
   // Handlers
@@ -700,9 +762,27 @@ export default function WorkspaceCanvas({
         </span>
       </div>
 
-      {/* Stats */}
-      <div className="absolute top-3 right-3 z-40 text-[10px] text-stone-700">
-        {sequenceFragments.length} workspace · {stageFragments.length} staged · {unplacedFragments.length} unplaced · {generatingFragments.length} gen
+      {/* Toolbar: fit + re-layout, then stats */}
+      <div className="absolute top-3 right-3 z-40 flex flex-col items-end gap-1">
+        <div className="flex gap-1">
+          <button
+            onClick={fitNow}
+            className="text-[10px] px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 transition-colors"
+            title="Center and zoom-fit all content (F)"
+          >
+            fit
+          </button>
+          <button
+            onClick={relayoutNow}
+            className="text-[10px] px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-amber-300 hover:border-amber-700 transition-colors"
+            title="Discard saved positions and re-run layout from scratch"
+          >
+            re-layout
+          </button>
+        </div>
+        <div className="text-[10px] text-stone-700">
+          {sequenceFragments.length} workspace · {stageFragments.length} staged · {unplacedFragments.length} unplaced · {generatingFragments.length} gen
+        </div>
       </div>
 
       {/* Pan/zoom canvas */}

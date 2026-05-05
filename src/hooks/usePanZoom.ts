@@ -108,6 +108,34 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
     setState({ panX: 0, panY: 0, zoom: 1 });
   }, []);
 
+  // Fit a content bounding box (in canvas-content coordinates, before pan/zoom)
+  // into the viewport, with optional padding. Pan + zoom are computed so the
+  // bbox is centered.
+  const fitToBox = useCallback(
+    (
+      bbox: { minX: number; minY: number; maxX: number; maxY: number },
+      viewport: { width: number; height: number },
+      paddingFraction = 0.1
+    ) => {
+      const bboxW = Math.max(1, bbox.maxX - bbox.minX);
+      const bboxH = Math.max(1, bbox.maxY - bbox.minY);
+      const padX = viewport.width * paddingFraction;
+      const padY = viewport.height * paddingFraction;
+      const availW = Math.max(1, viewport.width - 2 * padX);
+      const availH = Math.max(1, viewport.height - 2 * padY);
+      const fitZoom = Math.min(maxZoom, Math.max(minZoom, Math.min(availW / bboxW, availH / bboxH)));
+
+      // Pan so that the bbox center lands at the viewport center after zoom
+      const bboxCenterX = (bbox.minX + bbox.maxX) / 2;
+      const bboxCenterY = (bbox.minY + bbox.maxY) / 2;
+      const panX = viewport.width / 2 - fitZoom * bboxCenterX;
+      const panY = viewport.height / 2 - fitZoom * bboxCenterY;
+
+      setState({ panX, panY, zoom: fitZoom });
+    },
+    [minZoom, maxZoom]
+  );
+
   // Attach wheel listener with { passive: false } so we can preventDefault
   useEffect(() => {
     const el = containerRef.current;
@@ -126,6 +154,7 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
     },
     startCanvasPan,
     resetView,
+    fitToBox,
     isPanning,
   };
 }
