@@ -1084,9 +1084,10 @@ export default function WorkspaceCanvas({
         </div>
       </div>
 
-      {/* Pan/zoom canvas */}
+      {/* Pan/zoom canvas. cursor:grab hints that the empty background is
+          drag-pannable; fragments override with their own cursors. */}
       <div ref={containerRef} className="w-full h-full"
-        style={{ cursor: "default" }}
+        style={{ cursor: "grab" }}
         {...panZoomHandlers}>
         <div style={{
           transform: `translate(${panZoom.panX}px, ${panZoom.panY}px) scale(${panZoom.zoom})`,

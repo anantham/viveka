@@ -28,49 +28,74 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
   const panStart = useRef({ x: 0, y: 0 });
   const panStateAtStart = useRef({ panX: 0, panY: 0 });
 
-  // Zoom toward cursor position
+  // Wheel: zoom with Ctrl/Meta held, pan otherwise. Two-finger trackpad
+  // swipe fires wheel events with deltaX/deltaY and no modifiers, so this
+  // gives natural pan on Mac trackpads. Mouse-wheel (no modifiers) also
+  // pans, which is fine — Ctrl/Cmd+wheel is the unambiguous zoom gesture.
   const handleWheel = useCallback(
     (e: WheelEvent) => {
-      // Only zoom with Ctrl/Meta held
-      if (!e.ctrlKey && !e.metaKey) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-
       const container = containerRef.current;
       if (!container) return;
 
-      const rect = container.getBoundingClientRect();
-      // Cursor position relative to the container
-      const cursorX = e.clientX - rect.left;
-      const cursorY = e.clientY - rect.top;
+      const isZoom = e.ctrlKey || e.metaKey;
 
-      setState((prev) => {
-        const delta = -e.deltaY * zoomSensitivity;
-        const newZoom = Math.min(maxZoom, Math.max(minZoom, prev.zoom * (1 + delta)));
-        const scaleFactor = newZoom / prev.zoom;
+      if (isZoom) {
+        e.preventDefault();
+        e.stopPropagation();
 
-        // Adjust pan so the point under the cursor stays fixed
-        const newPanX = cursorX - scaleFactor * (cursorX - prev.panX);
-        const newPanY = cursorY - scaleFactor * (cursorY - prev.panY);
+        const rect = container.getBoundingClientRect();
+        const cursorX = e.clientX - rect.left;
+        const cursorY = e.clientY - rect.top;
 
-        return { panX: newPanX, panY: newPanY, zoom: newZoom };
-      });
+        setState((prev) => {
+          const delta = -e.deltaY * zoomSensitivity;
+          const newZoom = Math.min(maxZoom, Math.max(minZoom, prev.zoom * (1 + delta)));
+          const scaleFactor = newZoom / prev.zoom;
+          const newPanX = cursorX - scaleFactor * (cursorX - prev.panX);
+          const newPanY = cursorY - scaleFactor * (cursorY - prev.panY);
+          return { panX: newPanX, panY: newPanY, zoom: newZoom };
+        });
+      } else {
+        // Pan via wheel/trackpad. Sign convention: deltaX>0 means content
+        // should move LEFT under the cursor (typical trackpad behavior).
+        e.preventDefault();
+        setState((prev) => ({
+          ...prev,
+          panX: prev.panX - e.deltaX,
+          panY: prev.panY - e.deltaY,
+        }));
+      }
     },
     [minZoom, maxZoom, zoomSensitivity]
   );
 
-  // Middle-click or Space+click to pan
+  // Pointer-down pan: middle-click anywhere, OR left-click on empty canvas
+  // background (not on a fragment / button / input). Fragments stop
+  // propagation in their own handlers so events that reach this listener
+  // are background events by default — the closest() check is defensive.
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
-      // Middle mouse button (button 1)
-      if (e.button === 1) {
-        e.preventDefault();
-        isPanning.current = true;
-        panStart.current = { x: e.clientX, y: e.clientY };
-        panStateAtStart.current = { panX: state.panX, panY: state.panY };
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      const isMiddle = e.button === 1;
+      const isLeft = e.button === 0;
+      if (!isMiddle && !isLeft) return;
+
+      if (isLeft) {
+        const target = e.target as HTMLElement;
+        // Don't pan when the click landed on a fragment or interactive control.
+        if (
+          target.closest(
+            ".group.absolute, button, textarea, input, [data-text-content]"
+          )
+        ) {
+          return;
+        }
       }
+
+      e.preventDefault();
+      isPanning.current = true;
+      panStart.current = { x: e.clientX, y: e.clientY };
+      panStateAtStart.current = { panX: state.panX, panY: state.panY };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
     [state.panX, state.panY]
   );
