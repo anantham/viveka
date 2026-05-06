@@ -199,13 +199,15 @@ function NodeCard({
   const tokens = estimateTokens(node.content);
 
   return (
-    <div className="flex flex-col gap-1">
+    <div
+      className={`flex flex-col gap-1 rounded border transition-all hover:brightness-125 ${klass} ${
+        isInSequence ? "ring-1 ring-white/15" : ""
+      } ${isExpanded ? "w-72" : "w-32"}`}
+      title={node.id}
+    >
       <button
         onClick={onToggle}
-        className={`text-left rounded border px-2 py-1.5 transition-all hover:brightness-125 ${klass} ${
-          isInSequence ? "ring-1 ring-white/15" : ""
-        } ${isExpanded ? "w-72" : "w-32"}`}
-        title={node.id}
+        className="text-left px-2 py-1.5 cursor-pointer"
       >
         <div className="flex items-baseline gap-2 text-[9px] uppercase tracking-wider opacity-70 mb-0.5">
           <span>{role}</span>
@@ -223,26 +225,26 @@ function NodeCard({
             (role === "system" ? "ROOT · " : "") + preview(node.content, isExpanded ? 99999 : 80)
           )}
         </div>
-        {isExpanded && (
-          <div className="mt-2 pt-2 border-t border-stone-800/60 flex items-baseline gap-3 text-[9px] text-stone-500">
-            <span className="font-mono">{node.id.slice(0, 8)}</span>
-            {node.timing?.durationMs ? (
-              <span>{(node.timing.durationMs / 1000).toFixed(1)}s</span>
-            ) : null}
-            {onSelect && role !== "system" && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelect(node.id);
-                }}
-                className="ml-auto text-stone-400 hover:text-stone-200 underline-offset-2 hover:underline"
-              >
-                open in canvas →
-              </button>
-            )}
-          </div>
-        )}
       </button>
+      {isExpanded && (
+        <div className="px-2 pb-1.5 pt-1 border-t border-stone-800/60 flex items-baseline gap-3 text-[9px] text-stone-500">
+          <span className="font-mono">{node.id.slice(0, 8)}</span>
+          {node.timing?.durationMs ? (
+            <span>{(node.timing.durationMs / 1000).toFixed(1)}s</span>
+          ) : null}
+          {onSelect && role !== "system" && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect(node.id);
+              }}
+              className="ml-auto text-stone-400 hover:text-stone-200 underline-offset-2 hover:underline"
+            >
+              open in canvas →
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

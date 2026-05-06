@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ContextBlock, estimateTokens } from "@/lib/types";
 
 interface ContextPanelProps {
@@ -21,6 +21,8 @@ export default function ContextPanel({
   const [filePath, setFilePath] = useState("");
   const [fileName, setFileName] = useState("");
   const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch("/api/context/library")
@@ -85,6 +87,54 @@ export default function ContextPanel({
 
   const handleLibraryAdd = async (libBlock: ContextBlock) => {
     await addBlock(libBlock.name, libBlock.content, "library");
+  };
+
+  // Read uploaded files (from <input type="file"> — single file, multi-file,
+  // or webkitdirectory folder) and add each as a context block. Filters
+  // to .md / .txt / .markdown by extension since folder upload returns
+  // every file in the tree. Reads contents client-side via File.text(),
+  // so the server never needs an absolute path.
+  const handleUploadedFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const allowed = /\.(md|markdown|txt)$/i;
+    const files = Array.from(fileList).filter((f) => allowed.test(f.name));
+    if (files.length === 0) {
+      alert("No .md / .markdown / .txt files found in the selection.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const newBlocks: ContextBlock[] = [];
+      for (const file of files) {
+        // webkitRelativePath is set only for folder uploads; gives the
+        // path relative to the chosen folder root (e.g. "notes/2026/april.md").
+        const relPath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+        const displayName = relPath && relPath.length > 0 ? relPath : file.name;
+        const content = await file.text();
+        const res = await fetch("/api/context/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId,
+            name: displayName,
+            content,
+            source: "file",
+          }),
+        });
+        const block = await res.json();
+        newBlocks.push(block);
+      }
+      onBlocksChange([...blocks, ...newBlocks]);
+    } catch (err) {
+      console.error("Failed to load uploaded files:", err);
+      alert(`Failed to load files: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setLoading(false);
+      setShowAdd(null);
+      // Clear the inputs so re-selecting the same file fires onChange again
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (folderInputRef.current) folderInputRef.current.value = "";
+    }
   };
 
   const handleSaveToLibrary = async (block: ContextBlock) => {
@@ -245,30 +295,78 @@ export default function ContextPanel({
         </div>
       )}
 
-      {/* File form */}
+      {/* File picker — native browser dialog. Multi-select for files,
+          webkitdirectory for folders (recursive); both filter to
+          .md / .markdown / .txt before reading. */}
       {showAdd === "file" && (
         <div className="px-4 py-2 space-y-2 border-t border-stone-800/50">
+          <div className="flex gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading}
+              className="px-3 py-1 text-xs bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 disabled:opacity-50"
+            >
+              {loading ? "loading…" : "Choose files…"}
+            </button>
+            <button
+              onClick={() => folderInputRef.current?.click()}
+              disabled={loading}
+              className="px-3 py-1 text-xs bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 disabled:opacity-50"
+            >
+              {loading ? "loading…" : "Choose folder…"}
+            </button>
+          </div>
           <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="Local file path (e.g. /Users/.../tweets.txt)"
-            className="w-full bg-stone-800 border border-stone-600 rounded px-2 py-1 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept=".md,.markdown,.txt,text/markdown,text/plain"
+            className="hidden"
+            onChange={(e) => handleUploadedFiles(e.target.files)}
           />
           <input
-            type="text"
-            value={fileName}
-            onChange={(e) => setFileName(e.target.value)}
-            placeholder="Display name (optional, defaults to filename)"
-            className="w-full bg-stone-800 border border-stone-600 rounded px-2 py-1 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+            ref={folderInputRef}
+            type="file"
+            multiple
+            // webkitdirectory + directory are non-standard but supported in
+            // Chrome / Edge / Safari / Firefox for folder upload.
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+            className="hidden"
+            onChange={(e) => handleUploadedFiles(e.target.files)}
           />
-          <button
-            onClick={handleFile}
-            disabled={loading || !filePath.trim()}
-            className="px-3 py-1 text-xs bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 disabled:opacity-50"
-          >
-            {loading ? "Loading..." : "Load file"}
-          </button>
+          <div className="text-[10px] text-stone-700">
+            .md / .markdown / .txt only · folder picker grabs all matching files recursively
+          </div>
+
+          {/* Power-user fallback: server-side absolute path. */}
+          <details className="pt-1">
+            <summary className="text-[10px] text-stone-700 cursor-pointer hover:text-stone-500">
+              or type a server path…
+            </summary>
+            <div className="space-y-2 pt-2">
+              <input
+                type="text"
+                value={filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                placeholder="Absolute path on the server (e.g. /Users/.../tweets.txt)"
+                className="w-full bg-stone-800 border border-stone-600 rounded px-2 py-1 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+              />
+              <input
+                type="text"
+                value={fileName}
+                onChange={(e) => setFileName(e.target.value)}
+                placeholder="Display name (optional, defaults to filename)"
+                className="w-full bg-stone-800 border border-stone-600 rounded px-2 py-1 text-xs text-stone-200 placeholder:text-stone-600 focus:outline-none focus:border-stone-500"
+              />
+              <button
+                onClick={handleFile}
+                disabled={loading || !filePath.trim()}
+                className="px-3 py-1 text-xs bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 disabled:opacity-50"
+              >
+                {loading ? "Loading..." : "Load by path"}
+              </button>
+            </div>
+          </details>
         </div>
       )}
 
