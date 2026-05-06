@@ -727,6 +727,65 @@ export default function WorkspaceCanvas({
     return final;
   }, [basePositions, physicsPositions, manualPositions, mergeCandidate, dragState]);
 
+  // ---------------------------------------------------------------------
+  // Pretext-with-obstacles soft avoidance.
+  //
+  // When neighbors approach a fragment from the left or the right, the
+  // fragment narrows its visible text column on that side to make room.
+  // Pure visual reshape — physics and dagre stay on canonical full
+  // width so this doesn't fight the user's drag or the bbox-overlap
+  // forces. The encroaching fragment is treated as an obstacle whose
+  // silhouette intrudes into the canonical 480px column.
+  //
+  // Effect: at rest the column is full width; as a neighbor comes close
+  // horizontally and overlaps vertically, this fragment's column
+  // narrows on the facing side. CSS transition smooths the reshape.
+  // ---------------------------------------------------------------------
+
+  const MIN_EFFECTIVE_WIDTH = 200;
+  const effectiveWidths = useMemo(() => {
+    const out: Record<string, number> = {};
+    const visible = allVisible.filter((f) => positions[f.id]);
+    for (const a of visible) {
+      const aPos = positions[a.id];
+      const aH = heightFor(a);
+      if (!aPos) {
+        out[a.id] = nodeWidth;
+        continue;
+      }
+      const aTop = aPos.y;
+      const aBottom = aPos.y + aH;
+      const aLeft = aPos.x;
+      const aRight = aPos.x + nodeWidth;
+      let leftEnc = 0;
+      let rightEnc = 0;
+      for (const b of visible) {
+        if (b.id === a.id) continue;
+        const bPos = positions[b.id];
+        if (!bPos) continue;
+        const bH = heightFor(b);
+        const bTop = bPos.y;
+        const bBottom = bPos.y + bH;
+        // Vertical overlap is required for horizontal encroachment to
+        // matter — a neighbor far above or below shouldn't squish the
+        // column.
+        if (bBottom <= aTop || bTop >= aBottom) continue;
+        const bLeft = bPos.x;
+        const bRight = bPos.x + nodeWidth;
+        // Right-side encroachment: B's left edge has crossed into A's column.
+        if (bLeft > aLeft && bLeft < aRight) {
+          rightEnc = Math.max(rightEnc, aRight - bLeft);
+        }
+        // Left-side encroachment: B's right edge has crossed into A's column.
+        if (bRight > aLeft && bRight < aRight) {
+          leftEnc = Math.max(leftEnc, bRight - aLeft);
+        }
+      }
+      out[a.id] = Math.max(MIN_EFFECTIVE_WIDTH, nodeWidth - leftEnc - rightEnc);
+    }
+    return out;
+  }, [allVisible, positions, nodeWidth, heightFor]);
+
   // -----------------------------------------------------------------------
   // Proximity pairs (Experiment B): pairs of visible fragments within r_flow.
   // Visual gradient cue showing two fragments "want to flow together" — the
@@ -1076,18 +1135,23 @@ export default function WorkspaceCanvas({
       ? (mergeCandidate.confirmed ? 0 : 0.15)
       : 1;
 
+    // Soft avoidance: if a neighbor is encroaching horizontally on this
+    // fragment's column, narrow the visible width on the facing side.
+    // Pure visual reflow — physics still uses canonical NODE_WIDTH_FULL.
+    const effectiveW = effectiveWidths[f.id] ?? NODE_WIDTH_FULL;
+
     return (
       <div
         key={f.id}
         data-fragment-id={f.id}
         className={`absolute cursor-move group ${stripe} ${isStaged ? "border-l-amber-600/40 border-dashed" : ""}`}
         style={{
-          left: pos.x, top: pos.y, width: NODE_WIDTH_FULL,
+          left: pos.x, top: pos.y, width: effectiveW,
           zIndex: dragState?.fragmentId === f.id ? 50 : 1,
           opacity: baseOpacity * mergeFadeOpacity,
           transition: isMergePart
-            ? "opacity 1.6s ease-out, left 0.6s cubic-bezier(0.4, 0, 0.2, 1), top 0.6s cubic-bezier(0.4, 0, 0.2, 1)"
-            : "opacity 250ms ease-out",
+            ? "opacity 1.6s ease-out, left 0.6s cubic-bezier(0.4, 0, 0.2, 1), top 0.6s cubic-bezier(0.4, 0, 0.2, 1), width 0.4s cubic-bezier(0.4, 0, 0.2, 1)"
+            : "opacity 250ms ease-out, width 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
         }}
         onPointerDown={(e) => handlePointerDown(e, f.id)}
         onPointerMove={handlePointerMove}
@@ -1286,7 +1350,7 @@ export default function WorkspaceCanvas({
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
       handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, onEdit, onGenerate,
-      inlineAlts, mergeCandidate, onUnmerge]);
+      inlineAlts, mergeCandidate, onUnmerge, effectiveWidths]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
