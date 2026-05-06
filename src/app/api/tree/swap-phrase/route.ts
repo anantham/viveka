@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getWorkspace } from "@/lib/workspace-store";
+import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
 import { queryClaudeCode } from "@/lib/claude";
 
 /**
@@ -54,8 +54,29 @@ export async function POST(req: NextRequest) {
   const escaped = originalPhrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const occRe = new RegExp(`\\b${escaped}\\b`, "gi");
   const occurrences = (fullContent.match(occRe) ?? []).length;
+
+  // Helper to log every swap attempt to the X-ray, even the cheap
+  // literal paths. Each call to this endpoint = one opLog entry.
+  const logSwap = (method: string, swapCount: number, capturedPrompt?: string) => {
+    const fresh = getWorkspace(treeId);
+    if (!fresh) return;
+    fresh.opLog.push({
+      type: "swap-phrase",
+      sourceFragmentId: fragmentId,
+      originalPhrase,
+      alternativePhrase,
+      method,
+      swapCount,
+      model: fresh.settings.model,
+      timestamp: new Date().toISOString(),
+      prompt: capturedPrompt,
+    });
+    saveWorkspace(fresh);
+  };
+
   if (occurrences <= 1) {
     const edited = fullContent.replace(occRe, alternativePhrase);
+    logSwap("literal-single", occurrences);
     return NextResponse.json({
       editedContent: edited,
       swapCount: occurrences,
@@ -106,6 +127,7 @@ ${fullContent}`;
         `[swap-phrase] suspicious length ratio ${ratio.toFixed(2)} — falling back to literal`,
       );
       const fallback = fullContent.replace(occRe, alternativePhrase);
+      logSwap("literal-fallback", occurrences, prompt);
       return NextResponse.json({
         editedContent: fallback,
         swapCount: occurrences,
@@ -118,6 +140,7 @@ ${fullContent}`;
       `[swap-phrase] DONE in ${durationMs}ms · ${occurrences} occurrences considered`,
     );
 
+    logSwap("llm-aware", occurrences, prompt);
     return NextResponse.json({
       editedContent: edited,
       swapCount: occurrences,
@@ -127,6 +150,7 @@ ${fullContent}`;
     console.error("[swap-phrase] error:", err);
     // Hard fallback to literal replace-all so the UI never gets stuck.
     const fallback = fullContent.replace(occRe, alternativePhrase);
+    logSwap("literal-fallback", occurrences, prompt);
     return NextResponse.json({
       editedContent: fallback,
       swapCount: occurrences,

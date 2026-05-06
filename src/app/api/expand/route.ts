@@ -72,6 +72,16 @@ export async function POST(req: NextRequest) {
           completedAt: new Date().toISOString(),
           durationMs: Date.now() - startMs,
         };
+        // Log to opLog so X-ray sees the expand call.
+        freshWs.opLog.push({
+          type: "expand",
+          sourceFragmentId: lastFragId,
+          mode: mode ?? "full",
+          resultIds: [expansionFrag.id],
+          timestamp: new Date(startMs).toISOString(),
+          prompt,
+          model,
+        });
         saveWorkspace(freshWs);
         console.log(`[expand] done in ${Date.now() - startMs}ms`);
       }

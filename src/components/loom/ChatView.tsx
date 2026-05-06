@@ -159,7 +159,7 @@ function OpEntry({
   // Renderers by op type. Most show a one-line summary; ai-generated /
   // reroll get an expandable body with prompt + result.
   if (op.type === "ai-generated") {
-    const result = ws.fragments[op.fragmentId];
+    const result = op.fragmentId ? ws.fragments[op.fragmentId] : null;
     return (
       <div className="border border-stone-800 rounded">
         <button
@@ -171,6 +171,14 @@ function OpEntry({
           </span>
           <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
           <span className="text-[10px] text-stone-700">· {op.model}</span>
+          {op.ephemeral && (
+            <span className="text-[10px] text-stone-500 italic">ephemeral</span>
+          )}
+          {op.durationMs !== undefined && (
+            <span className="text-[10px] text-stone-700">
+              · {(op.durationMs / 1000).toFixed(1)}s
+            </span>
+          )}
           <span className="text-[10px] text-stone-700 ml-auto">
             {expanded ? "▾" : "▸"}
           </span>
@@ -333,7 +341,97 @@ function OpEntry({
     );
   }
 
-  // Fallback for low-signal ops (move, prune, restore, zone-transfer, pick, expand)
+  if (op.type === "expand") {
+    return (
+      <div className="border border-stone-800 rounded">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="w-full flex items-baseline gap-3 px-3 py-2 text-left hover:bg-stone-900/50 transition-colors"
+        >
+          <span className="uppercase tracking-wider text-[10px] text-fuchsia-400/80">expand</span>
+          {op.mode && <span className="text-[10px] text-stone-700">· {op.mode}</span>}
+          <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
+          {op.model && <span className="text-[10px] text-stone-700">· {op.model}</span>}
+          <span className="text-[10px] text-stone-700 font-mono">
+            {shortId(op.sourceFragmentId)} → {op.resultIds.length} frag
+          </span>
+          <span className="text-[10px] text-stone-700 ml-auto">
+            {expanded ? "▾" : "▸"}
+          </span>
+        </button>
+        {expanded && op.prompt && (
+          <div className="px-3 py-2 border-t border-stone-800 bg-stone-950">
+            <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">prompt</div>
+            <pre className="text-[11px] text-stone-400 whitespace-pre-wrap font-mono leading-relaxed">
+              {op.prompt}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (op.type === "draft") {
+    return (
+      <div className="border border-stone-800 rounded">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="w-full flex items-baseline gap-3 px-3 py-2 text-left hover:bg-stone-900/50 transition-colors"
+        >
+          <span className="uppercase tracking-wider text-[10px] text-cyan-400/80">draft</span>
+          <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
+          <span className="text-[10px] text-stone-700">· {op.model}</span>
+          <span className="text-[10px] text-stone-700">
+            {op.resultIds.length} drafts of {shortId(op.parentId)}
+          </span>
+          <span className="text-[10px] text-stone-700 ml-auto">
+            {expanded ? "▾" : "▸"}
+          </span>
+        </button>
+        {expanded && op.prompt && (
+          <div className="px-3 py-2 border-t border-stone-800 bg-stone-950">
+            <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">prompt template</div>
+            <pre className="text-[11px] text-stone-400 whitespace-pre-wrap font-mono leading-relaxed">
+              {op.prompt}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (op.type === "swap-phrase") {
+    return (
+      <div className="border border-stone-800 rounded">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="w-full flex items-baseline gap-3 px-3 py-2 text-left hover:bg-stone-900/50 transition-colors"
+        >
+          <span className="uppercase tracking-wider text-[10px] text-emerald-400/80">swap</span>
+          <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
+          <span className="text-[10px] text-stone-700">· {op.method}</span>
+          <span className="text-[10px] text-stone-500 italic">
+            "{op.originalPhrase.length > 20 ? op.originalPhrase.slice(0, 20) + "…" : op.originalPhrase}"
+            <span className="not-italic text-stone-700"> → </span>
+            "{op.alternativePhrase.length > 20 ? op.alternativePhrase.slice(0, 20) + "…" : op.alternativePhrase}"
+          </span>
+          <span className="text-[10px] text-stone-700 ml-auto">
+            {op.swapCount}× {expanded ? "▾" : "▸"}
+          </span>
+        </button>
+        {expanded && op.prompt && (
+          <div className="px-3 py-2 border-t border-stone-800 bg-stone-950">
+            <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">prompt</div>
+            <pre className="text-[11px] text-stone-400 whitespace-pre-wrap font-mono leading-relaxed">
+              {op.prompt}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Fallback for low-signal ops (move, prune, restore, zone-transfer, pick)
   return (
     <div className="px-3 py-1 text-[10px] text-stone-700 flex items-baseline gap-3">
       <span className="uppercase tracking-wider">{op.type}</span>

@@ -33,6 +33,13 @@ export async function POST(req: NextRequest) {
   const history = getConversationHistory(ws);
   const model = ws.settings.model || process.env.VIVEKA_MODEL || "sonnet";
 
+  // Capture the prompt template once for the opLog (each draft uses
+  // the same template with a different draft-index marker).
+  const promptTemplate = `Given this conversation, suggest what the user might say next. Each draft should explore a DIFFERENT direction or angle. The session intent is: "${ws.intent}".
+
+Return ONLY the suggested user message, nothing else.`;
+  const draftStartedAt = new Date().toISOString();
+
   Promise.all(
     pendingIds.map(async (fragId, i) => {
       const draftPrompt = `Given this conversation, suggest what the user might say next. This is draft ${i + 1} of ${n} — each draft should explore a DIFFERENT direction or angle. The session intent is: "${ws.intent}".
@@ -69,6 +76,22 @@ Return ONLY the suggested user message, nothing else. No quotes, no explanation,
       }
     })
   ).then(() => {
+    // Single draft op summarizing the batch — the X-ray sees one
+    // "draft" entry per click of "draft replies" rather than N noisy
+    // ai-gen entries. Each individual draft already exists as a
+    // fragment; the op preserves the prompt + model + fragment list.
+    const finalWs = getWorkspace(treeId);
+    if (finalWs) {
+      finalWs.opLog.push({
+        type: "draft",
+        parentId,
+        resultIds: pendingIds,
+        model,
+        timestamp: draftStartedAt,
+        prompt: promptTemplate,
+      });
+      saveWorkspace(finalWs);
+    }
     console.log(`[draft] ${n} drafts done for ${parentId.slice(0, 8)}`);
   });
 

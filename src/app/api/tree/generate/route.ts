@@ -143,6 +143,27 @@ export async function POST(req: NextRequest) {
           .filter((r): r is string => !!r && r.length > 0)
       )
     );
+
+    // Log every ephemeral generation as an ai-generated op (with
+    // fragmentId="" since nothing persisted) so the X-ray shows ALL
+    // LLM calls, not just persisted ones.
+    const epLogWs = getWorkspace(treeId);
+    if (epLogWs) {
+      const now = new Date().toISOString();
+      for (let i = 0; i < n; i++) {
+        epLogWs.opLog.push({
+          type: "ai-generated",
+          fragmentId: "",
+          model,
+          prompt: promptMessage,
+          params: {},
+          timestamp: now,
+          ephemeral: true,
+        });
+      }
+      saveWorkspace(epLogWs);
+    }
+
     console.log(`[generate ephemeral] returning ${alternatives.length} alternatives`);
     return NextResponse.json({
       alternatives,
@@ -180,6 +201,19 @@ export async function POST(req: NextRequest) {
           if (!anyInSeq) {
             appendToSequence(freshWs, fragId);
           }
+          // Log the LLM call to opLog so the X-ray sees it. Without
+          // this every persisted generation was silent in the X-ray
+          // (only fragments showed up; the call + prompt + model were
+          // lost).
+          freshWs.opLog.push({
+            type: "ai-generated",
+            fragmentId: fragId,
+            model,
+            prompt: promptMessage,
+            params: {},
+            timestamp: startedAt,
+            durationMs,
+          });
           saveWorkspace(freshWs);
           console.log(`[generate] completion ${i + 1}/${n} (${fragId.slice(0, 8)}) DONE in ${durationMs}ms | ${response.text.length} chars | tokens: in=${response.usage?.inputTokens ?? "?"} out=${response.usage?.outputTokens ?? "?"}`);
         }

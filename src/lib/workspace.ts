@@ -75,7 +75,19 @@ export interface Edge {
 
 export type Operation =
   | { type: "human-typed"; fragmentId: string; content: string; timestamp: string }
-  | { type: "ai-generated"; fragmentId: string; model: string; prompt: string; params: GenerationParams; timestamp: string }
+  | {
+      type: "ai-generated";
+      // Optional: ephemeral generations don't persist a fragment, but the
+      // LLM call itself should still appear in the X-ray. Empty string
+      // / undefined → ephemeral.
+      fragmentId: string;
+      model: string;
+      prompt: string;
+      params: GenerationParams;
+      timestamp: string;
+      ephemeral?: boolean;
+      durationMs?: number;
+    }
   | { type: "split"; sourceFragmentId: string; charStart: number; charEnd: number; resultIds: string[]; timestamp: string }
   | { type: "move"; fragmentId: string; fromIndex: number; toIndex: number; timestamp: string }
   | {
@@ -115,7 +127,37 @@ export type Operation =
       selectedText?: string;
       prompt?: string;
     }
-  | { type: "expand"; sourceFragmentId: string; mode: string; resultIds: string[]; timestamp: string };
+  | {
+      type: "expand";
+      sourceFragmentId: string;
+      mode: string;
+      resultIds: string[];
+      timestamp: string;
+      prompt?: string;
+      model?: string;
+    }
+  | {
+      type: "draft";
+      parentId: string;
+      resultIds: string[];
+      model: string;
+      timestamp: string;
+      prompt?: string;
+    }
+  | {
+      // Precision-spread phrase swap. Pure read on the workspace
+      // (doesn't persist new fragments) but still hits the LLM, so
+      // the X-ray needs to record it.
+      type: "swap-phrase";
+      sourceFragmentId: string;
+      originalPhrase: string;
+      alternativePhrase: string;
+      method: string;
+      swapCount: number;
+      model: string;
+      timestamp: string;
+      prompt?: string;
+    };
 
 // ---------------------------------------------------------------------------
 // Workspace
