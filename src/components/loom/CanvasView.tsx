@@ -30,7 +30,6 @@ interface CanvasViewProps {
   onRefreshTree?: () => void;
   onSplitRange?: (nodeId: string, charStart: number, charEnd: number) => void;
   isGenerating: boolean;
-  enableWordLevel?: boolean;
 }
 
 type LayoutMode = "canvas" | "column";
@@ -48,7 +47,6 @@ export default function CanvasView({
   onRefreshTree,
   onSplitRange,
   isGenerating,
-  enableWordLevel = false,
 }: CanvasViewProps) {
   const activePath = getActivePath(tree);
   const activeNodeIds = activePath
@@ -561,7 +559,6 @@ export default function CanvasView({
                 onSplitRange?.(nodeId, charStart, charEnd);
                 onRefreshTree?.();
               }}
-              enableWordLevel={enableWordLevel}
             />
           );
         })}

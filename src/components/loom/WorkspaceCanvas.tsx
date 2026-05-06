@@ -6,7 +6,6 @@ import { usePanZoom } from "@/hooks/usePanZoom";
 import { usePhysicsSimulation, angleToMergeType } from "@/hooks/usePhysicsSimulation";
 import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
 import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
-import InlineAlternativesPanel from "./InlineAlternativesPanel";
 import MergePreview from "./MergePreview";
 import dagre from "dagre";
 import WordLevelContent from "./WordLevelContent";
@@ -40,7 +39,6 @@ interface WorkspaceCanvasProps {
   onSelectFragment: (fragmentId: string) => void;
   onRefresh: () => void;
   isGenerating: boolean;
-  enableWordLevel?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +97,49 @@ function MergeOrGenerateProgress({ fragment }: { fragment: Fragment }) {
         </span>
       )}
     </div>
+  );
+}
+
+// Time-bounded unmerge flash. After a merge completes, this badge
+// auto-shows for ~8 seconds so the writer sees the undo affordance
+// without having to hover. The same action is also reachable via the
+// hover toolbar later, but the flash window means an "oh that's not
+// what I wanted" reaction has an obvious target.
+const UNMERGE_FLASH_MS = 8000;
+function UnmergeFlashBadge({
+  fragmentId,
+  completedAtIso,
+  onUnmerge,
+}: {
+  fragmentId: string;
+  completedAtIso: string;
+  onUnmerge: (id: string) => void;
+}) {
+  const completedAt = new Date(completedAtIso).getTime();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const initialRemaining = UNMERGE_FLASH_MS - (Date.now() - completedAt);
+    if (initialRemaining <= 0) return;
+    const id = setInterval(() => setNow(Date.now()), 250);
+    const t = setTimeout(() => clearInterval(id), initialRemaining + 50);
+    return () => { clearInterval(id); clearTimeout(t); };
+  }, [completedAt]);
+  const elapsed = now - completedAt;
+  if (elapsed >= UNMERGE_FLASH_MS) return null;
+  const remaining = Math.ceil((UNMERGE_FLASH_MS - elapsed) / 1000);
+  // Fade out over the last ~1.2s
+  const opacity = elapsed > UNMERGE_FLASH_MS - 1200
+    ? Math.max(0, (UNMERGE_FLASH_MS - elapsed) / 1200)
+    : 1;
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onUnmerge(fragmentId); }}
+      className="absolute -top-7 right-2 z-50 px-2 py-0.5 rounded bg-rose-950/80 border border-rose-700/60 text-[10px] text-rose-200 font-mono pointer-events-auto hover:text-rose-100 hover:bg-rose-900/80 transition-colors"
+      style={{ opacity, transition: "opacity 200ms ease-out, background-color 150ms, color 150ms" }}
+      title="Restore the two original fragments and remove this merged result"
+    >
+      ↶ unmerge · {remaining}s
+    </button>
   );
 }
 
@@ -325,7 +366,6 @@ export default function WorkspaceCanvas({
   onSelectFragment,
   onRefresh,
   isGenerating,
-  enableWordLevel = false,
 }: WorkspaceCanvasProps) {
   const [manualPositions, setManualPositions] = useState<Record<string, Position>>({});
   const [splitToolbar, setSplitToolbar] = useState<{
@@ -1079,6 +1119,16 @@ export default function WorkspaceCanvas({
           />
         )}
 
+        {/* Unmerge flash — auto-visible for 8s after a merge completes,
+            then fades to hover-only via the toolbar entry below. */}
+        {f.provenance.type === "merged" && f.timing?.completedAt && onUnmerge && (
+          <UnmergeFlashBadge
+            fragmentId={f.id}
+            completedAtIso={f.timing.completedAt}
+            onUnmerge={onUnmerge}
+          />
+        )}
+
         {/* Hover toolbar: chrome lives here, hidden until hover. Positioned
             above the text so it doesn't displace the layout. */}
         <div className="absolute -top-6 left-2 right-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -1159,14 +1209,6 @@ export default function WorkspaceCanvas({
             <MergeOrGenerateProgress fragment={f} />
           ) : f.status === "error" ? (
             <div className="text-red-400 text-xs">Error: {f.error || "failed"}</div>
-          ) : enableWordLevel ? (
-            <WordLevelContent
-              content={f.content}
-              onContentChange={(newContent) => {
-                onEdit(f.id, newContent);
-              }}
-              containerWidth={NODE_WIDTH_FULL - 24}
-            />
           ) : inlineAlts && inlineAlts.sourceFragmentId === f.id ? (
             // Inline alternatives preview. Two modes:
             //   replace: split content into prefix + highlighted alt + suffix
@@ -1243,7 +1285,7 @@ export default function WorkspaceCanvas({
     );
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
-      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, enableWordLevel, onEdit, onGenerate,
+      handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, onEdit, onGenerate,
       inlineAlts, mergeCandidate, onUnmerge]);
 
   // -----------------------------------------------------------------------

@@ -4,7 +4,6 @@ import { useRef, useState, useCallback } from "react";
 import { TreeNode } from "@/lib/tree";
 import { CursorTool } from "@/lib/canvas-utils";
 import VersionHistory from "./VersionHistory";
-import WordLevelContent from "./WordLevelContent";
 
 interface CanvasNodeProps {
   node: TreeNode;
@@ -25,7 +24,6 @@ interface CanvasNodeProps {
   onTangentSplit?: (nodeId: string, charPosition: number) => void;
   onVersionRevert?: (nodeId: string, content: string) => void;
   onSplitRange?: (nodeId: string, charStart: number, charEnd: number) => void;
-  enableWordLevel?: boolean;
 }
 
 export default function CanvasNode({
@@ -47,7 +45,6 @@ export default function CanvasNode({
   onTangentSplit,
   onVersionRevert,
   onSplitRange,
-  enableWordLevel = false,
 }: CanvasNodeProps) {
   const nodeRef = useRef<HTMLDivElement>(null);
   const isDraggingNode = useRef(false);
@@ -506,15 +503,6 @@ export default function CanvasNode({
           <div className="text-stone-500">Generating...</div>
         ) : node.status === "error" ? (
           <div className="text-red-400">Error: {node.error || "generation failed"}</div>
-        ) : enableWordLevel ? (
-          <WordLevelContent
-            content={node.content}
-            onContentChange={(newContent) => {
-              if (onContentReorder) {
-                onContentReorder(node.id, newContent);
-              }
-            }}
-          />
         ) : (
           <div className="whitespace-pre-wrap select-text" onMouseUp={handleTextMouseUp}>{node.content}</div>
         )}

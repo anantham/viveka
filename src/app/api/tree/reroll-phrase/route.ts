@@ -60,13 +60,20 @@ export async function POST(req: NextRequest) {
   const n = count ?? 5;
 
   // The prompt asks for ONLY the N alternative phrases — not full
-  // re-renders of the fragment content. The frontend handles
-  // substitution. This keeps the LLM focused, response shorter,
-  // and the parsed array compact and easy to display.
-  const prompt = `Context (do not rewrite this whole text):\n\n${fullContent}\n\n---\n\nThe phrase to rewrite is: "${selectedText}"\n\nReturn a JSON array of exactly ${n} alternative phrasings of just that phrase, each one a drop-in replacement that fits the surrounding context. No explanation, no full sentences, no markdown. Each array element is just the alternative phrase.`;
+  // re-renders of the fragment content. Tightened constraints prevent
+  // the model's two common failure modes:
+  //   1. returning multi-word phrases that include the original word
+  //      ("intentional friction" as an alternative for "friction"), and
+  //   2. drifting in length so the substitution reads awkwardly.
+  const wordCount = selectedText.trim().split(/\s+/).length;
+  const lengthHint = wordCount === 1
+    ? "The original is a single word — every alternative MUST be a single word."
+    : `The original is ${wordCount} words — alternatives should be similar in length (give or take one word).`;
+
+  const prompt = `Context (do not rewrite this whole text):\n\n${fullContent}\n\n---\n\nThe phrase to rewrite is: "${selectedText}"\n\nGenerate exactly ${n} alternative phrasings of THAT phrase only. Hard constraints:\n- Each alternative must be a drop-in replacement that fits the surrounding context grammatically.\n- ${lengthHint}\n- Alternatives must NOT contain the original word${wordCount > 1 ? " or phrase" : ""}.\n- No quotes around the alternatives. No explanation. No markdown.\n- Output a JSON array of strings only.\n\nExample (single word):\nPhrase: "friction"\nAlternatives: ["resistance", "guardrails", "drag", "constraint", "pushback"]\n\nExample (multi-word):\nPhrase: "running quickly"\nAlternatives: ["sprinting fast", "dashing forward", "racing along", "moving rapidly", "darting ahead"]`;
 
   const systemPrompt =
-    "You are a writing assistant. You return ONLY valid JSON arrays of short strings — alternative phrasings of a small phrase the user wants to vary. No markdown fences, no explanation, no full-sentence rewrites. Each element is just the alternative phrase that should drop into the context as-is.";
+    "You are a writing assistant. You return ONLY valid JSON arrays of short strings — alternative phrasings of a small phrase the user wants to vary. No markdown fences, no explanation, no full-sentence rewrites. Each element must be a drop-in replacement preserving the original phrase's word count (or close to it). Alternatives must NOT contain the original word. Output the JSON array and nothing else.";
 
   try {
     const response = await queryClaudeCode(prompt, systemPrompt, [], {
@@ -84,13 +91,25 @@ export async function POST(req: NextRequest) {
       if (!Array.isArray(alternatives)) {
         throw new Error("Response is not an array");
       }
-      // Filter to non-empty strings only, dedupe
+      // Filter to non-empty strings only, dedupe, and exclude alternatives
+      // that still contain the original word as a token (model sometimes
+      // ignores the constraint and returns "intentional friction" for
+      // "friction"). Word-boundary check is case-insensitive.
+      const originalWordRe = new RegExp(
+        `\\b${selectedText.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+        "i"
+      );
       alternatives = Array.from(
         new Set(
           alternatives
             .filter((a) => typeof a === "string")
             .map((a) => a.trim())
-            .filter((a) => a.length > 0 && a !== selectedText)
+            .filter((a) => {
+              if (a.length === 0) return false;
+              if (a === selectedText) return false;
+              if (originalWordRe.test(a)) return false;
+              return true;
+            })
         )
       );
     } catch (parseErr) {
