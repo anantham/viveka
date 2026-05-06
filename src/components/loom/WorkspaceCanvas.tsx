@@ -497,10 +497,19 @@ export default function WorkspaceCanvas({
   // canvas shows ONE traversal of the tree — sequence + stage + active
   // generations. Sibling alternatives (unplacedFragments) are hidden here;
   // they live in tree view and surface ephemerally during inline reroll.
-  const allVisible = useMemo(
-    () => [...sequenceFragments, ...stageFragments, ...generatingFragments],
-    [sequenceFragments, stageFragments, generatingFragments]
-  );
+  //
+  // CRITICAL: dedupe by fragment id. A merged fragment lands in both
+  // sequence (just-inserted) and generatingFragments (status=generating
+  // while Claude runs), so concatenating without dedupe causes React
+  // duplicate-key errors and double-rendering during the merge LLM
+  // window.
+  const allVisible = useMemo(() => {
+    const seen = new Map<string, Fragment>();
+    for (const f of sequenceFragments) seen.set(f.id, f);
+    for (const f of stageFragments) seen.set(f.id, f);
+    for (const f of generatingFragments) seen.set(f.id, f);
+    return Array.from(seen.values());
+  }, [sequenceFragments, stageFragments, generatingFragments]);
 
   // Visible edges
   const visibleEdges = useMemo(() => {
