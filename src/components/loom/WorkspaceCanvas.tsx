@@ -10,7 +10,56 @@ import MergePreview from "./MergePreview";
 import dagre from "dagre";
 import MarkdownText from "../MarkdownText";
 
-type MergeType = "prepend" | "append" | "interleave" | "summarize";
+type MergeType = "prepend" | "append" | "interleave" | "summarize" | "insert";
+
+/**
+ * Snap a raw character offset to the nearest sane insertion point in
+ * `text`. Preference order: paragraph break (\n\n) within a window,
+ * then sentence end, then word boundary. Falls back to the raw offset.
+ * Used by precision-insert mode so the splice lands between paragraphs
+ * / sentences rather than mid-word.
+ */
+function snapToInsertionBoundary(text: string, pos: number): number {
+  if (pos <= 0) return 0;
+  if (pos >= text.length) return text.length;
+
+  // 1. paragraph break (\n\n)
+  const PARA_WINDOW = 60;
+  let bestPara = -1;
+  let bestParaDist = Infinity;
+  for (let i = Math.max(0, pos - PARA_WINDOW); i <= Math.min(text.length - 2, pos + PARA_WINDOW); i++) {
+    if (text[i] === "\n" && text[i + 1] === "\n") {
+      const offset = i + 2;
+      const dist = Math.abs(offset - pos);
+      if (dist < bestParaDist) { bestParaDist = dist; bestPara = offset; }
+    }
+  }
+  if (bestPara !== -1) return bestPara;
+
+  // 2. sentence end (. ! ? followed by whitespace)
+  const SENT_WINDOW = 30;
+  let bestSent = -1;
+  let bestSentDist = Infinity;
+  for (const m of text.matchAll(/[.!?]\s+/g)) {
+    const end = (m.index ?? 0) + m[0].length;
+    const dist = Math.abs(end - pos);
+    if (dist <= SENT_WINDOW && dist < bestSentDist) {
+      bestSentDist = dist;
+      bestSent = end;
+    }
+  }
+  if (bestSent !== -1) return bestSent;
+
+  // 3. word boundary
+  const WORD_WINDOW = 20;
+  for (let i = pos; i >= Math.max(0, pos - WORD_WINDOW); i--) {
+    if (/\s/.test(text[i])) return i + 1;
+  }
+  for (let i = pos; i <= Math.min(text.length - 1, pos + WORD_WINDOW); i++) {
+    if (/\s/.test(text[i])) return i + 1;
+  }
+  return pos;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -387,7 +436,12 @@ export default function WorkspaceCanvas({
   } | null>(null);
   const [inputText, setInputText] = useState("");
 
-  // Merge candidate state
+  // Merge candidate state. mergeType + insertOffset are LIVE-derived
+  // from positions (see mergeIntent memo below) — this state only
+  // tracks the gesture lifecycle (which fragments + when started +
+  // whether confirmed). Live derivation lets the writer wiggle the
+  // dragged fragment during the hold to re-aim (e.g. shift the insert
+  // caret to a different paragraph) without restarting the timer.
   const [mergeCandidate, setMergeCandidate] = useState<{
     draggedId: string;
     targetId: string;
@@ -798,6 +852,49 @@ export default function WorkspaceCanvas({
     return final;
   }, [basePositions, physicsPositions, manualPositions, mergeCandidate, dragState]);
 
+  // -----------------------------------------------------------------------
+  // Live merge intent — derived from current positions while a merge
+  // gesture is active. The dragged fragment's vertical center within
+  // the target's bbox determines:
+  //
+  //   above target          → SUMMARIZE
+  //   top edge (≤15%)       → PREPEND
+  //   body (15..85%)        → INSERT @ char offset
+  //   bottom edge (≥85%)    → APPEND
+  //   below target          → INTERLEAVE
+  //
+  // The character offset for INSERT is derived from the fractional
+  // position within the body, snapped to the nearest paragraph break /
+  // sentence end / word boundary so the splice lands somewhere sane.
+  // -----------------------------------------------------------------------
+  const mergeIntent = useMemo<{
+    mergeType: MergeType;
+    insertOffset?: number;
+  } | null>(() => {
+    if (!mergeCandidate) return null;
+    const dragged = positions[mergeCandidate.draggedId];
+    const target = positions[mergeCandidate.targetId];
+    if (!dragged || !target) return null;
+    const targetSize = physicsNodeSize(mergeCandidate.targetId);
+    const draggedSize = physicsNodeSize(mergeCandidate.draggedId);
+    const draggedCenterY = dragged.y + draggedSize.h / 2;
+    const t = (draggedCenterY - target.y) / Math.max(1, targetSize.h);
+
+    if (t < 0) return { mergeType: "summarize" };
+    if (t < 0.15) return { mergeType: "prepend" };
+    if (t > 1) return { mergeType: "interleave" };
+    if (t > 0.85) return { mergeType: "append" };
+
+    // Body — insert at computed offset
+    const targetFrag = ws.fragments[mergeCandidate.targetId];
+    const content = targetFrag?.content ?? "";
+    if (content.length === 0) return { mergeType: "prepend" };
+    const fraction = (t - 0.15) / 0.7;
+    const rawOffset = Math.round(Math.max(0, Math.min(1, fraction)) * content.length);
+    const offset = snapToInsertionBoundary(content, rawOffset);
+    return { mergeType: "insert", insertOffset: offset };
+  }, [mergeCandidate, positions, physicsNodeSize, ws.fragments]);
+
   // ---------------------------------------------------------------------
   // Pretext-with-obstacles soft avoidance.
   //
@@ -1088,10 +1185,15 @@ export default function WorkspaceCanvas({
     return () => clearTimeout(id);
   }, [mergeCandidate]);
 
-  // Fire merge API when confirmed (Phase 7 will add the actual endpoint)
+  // Fire merge API when confirmed. Uses the LIVE mergeIntent (not the
+  // stale type stored at detection time) so the writer's last position
+  // before confirm wins — they could have shifted from prepend to
+  // insert@line-7 during the hold.
   useEffect(() => {
     if (!mergeCandidate?.confirmed) return;
-    const { draggedId, targetId, mergeType } = mergeCandidate;
+    const { draggedId, targetId } = mergeCandidate;
+    const liveType = mergeIntent?.mergeType ?? mergeCandidate.mergeType;
+    const insertOffset = mergeIntent?.insertOffset;
     fetch("/api/tree/merge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1099,7 +1201,8 @@ export default function WorkspaceCanvas({
         treeId: ws.id,
         sourceId: draggedId,
         targetId,
-        mergeType,
+        mergeType: liveType,
+        insertOffset,
       }),
     })
       .then(() => {
@@ -1110,7 +1213,7 @@ export default function WorkspaceCanvas({
       .catch(() => {
         setMergeCandidate(null);
       });
-  }, [mergeCandidate?.confirmed, ws.id, killNode, onRefresh]);
+  }, [mergeCandidate?.confirmed, mergeIntent, ws.id, killNode, onRefresh]);
 
   // -----------------------------------------------------------------------
   // Render fragment based on semantic zoom
@@ -1431,23 +1534,52 @@ export default function WorkspaceCanvas({
                 </div>
               );
             })()
-          ) : (
-            <div
-              data-text-content
-              className="select-text cursor-text"
-              style={{ textWrap: "pretty" } as React.CSSProperties}
-              onMouseUp={() => handleTextMouseUp(f.id, f.content)}
-            >
-              <MarkdownText>{f.content}</MarkdownText>
-            </div>
-          )}
+          ) : (() => {
+            // Precision-insert caret: when this fragment is the active
+            // merge target AND the live mergeIntent is "insert", split
+            // the markdown render at the snapped offset and slip a
+            // blinking emerald rule between the two halves so the
+            // writer can SEE exactly where their drop will land.
+            const isInsertTarget =
+              mergeCandidate?.targetId === f.id &&
+              !mergeCandidate.confirmed &&
+              mergeIntent?.mergeType === "insert" &&
+              typeof mergeIntent.insertOffset === "number";
+
+            if (isInsertTarget) {
+              const off = mergeIntent!.insertOffset!;
+              return (
+                <div
+                  data-text-content
+                  className="select-text cursor-text"
+                  style={{ textWrap: "pretty" } as React.CSSProperties}
+                  onMouseUp={() => handleTextMouseUp(f.id, f.content)}
+                >
+                  <MarkdownText>{f.content.slice(0, off)}</MarkdownText>
+                  <div className="my-2 h-0.5 bg-emerald-400/80 rounded-full animate-pulse" />
+                  <MarkdownText>{f.content.slice(off)}</MarkdownText>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                data-text-content
+                className="select-text cursor-text"
+                style={{ textWrap: "pretty" } as React.CSSProperties}
+                onMouseUp={() => handleTextMouseUp(f.id, f.content)}
+              >
+                <MarkdownText>{f.content}</MarkdownText>
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
   }, [positions, semanticZoom, editingId, editText, dragState, ws.sequence,
       siblingGroups, handlePointerDown, handlePointerMove, handlePointerUp,
       handleTextMouseUp, startEdit, saveEdit, onSelectFragment, onZoneTransfer, onEdit, onGenerate,
-      inlineAlts, mergeCandidate, onUnmerge, effectiveWidths]);
+      inlineAlts, mergeCandidate, mergeIntent, onUnmerge, effectiveWidths]);
 
   // -----------------------------------------------------------------------
   // Edges with labels
@@ -1711,7 +1843,7 @@ export default function WorkspaceCanvas({
               edited text — this preview is the visual deformation that
               answers the 'fragments deform as they approach' part of
               the vision. */}
-          {mergeCandidate && positions[mergeCandidate.targetId] && positions[mergeCandidate.draggedId] && (() => {
+          {mergeCandidate && positions[mergeCandidate.targetId] && positions[mergeCandidate.draggedId] && mergeIntent?.mergeType !== "insert" && (() => {
             const targetFrag = ws.fragments[mergeCandidate.targetId];
             const sourceFrag = ws.fragments[mergeCandidate.draggedId];
             if (!targetFrag || !sourceFrag) return null;
@@ -1738,8 +1870,8 @@ export default function WorkspaceCanvas({
           })()}
 
           {/* Merge spinner overlay (counts the hold time, color-coded by
-              merge variant). Lives on top of the preview so the timer is
-              still readable. */}
+              merge variant). Uses LIVE intent so the label updates as
+              the writer wiggles the dragged fragment over the target. */}
           {mergeCandidate && positions[mergeCandidate.targetId] && (
             <MergeSpinner
               x={positions[mergeCandidate.targetId].x}
@@ -1748,8 +1880,9 @@ export default function WorkspaceCanvas({
               nodeHeight={nodeH}
               startedAt={mergeCandidate.startedAt}
               durationMs={MERGE_HOLD_MS}
-              mergeType={mergeCandidate.mergeType}
+              mergeType={mergeIntent?.mergeType ?? mergeCandidate.mergeType}
               confirmed={mergeCandidate.confirmed}
+              insertOffset={mergeIntent?.insertOffset}
             />
           )}
 

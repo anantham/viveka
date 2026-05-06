@@ -28,6 +28,7 @@ const MERGE_RGB: Record<MergeType, string> = {
   prepend: "245, 158, 11",
   interleave: "139, 92, 246",
   summarize: "20, 184, 166",
+  insert: "16, 185, 129",
 };
 
 // Local approximation of the merged content shown during the hold.
@@ -61,6 +62,11 @@ function previewContent(
       // the writer sees both source materials while waiting for the actual
       // distilled merge to be generated server-side.
       return `[distilling…]\n\n${sourceContent}\n\n${targetContent}`;
+    case "insert":
+      // Insert mode renders the precision caret directly inside the
+      // target fragment in WorkspaceCanvas, not via this preview overlay.
+      // Fallback shape if the preview is shown anyway: side-by-side view.
+      return `${targetContent}\n\n[insert: ${sourceContent}]`;
   }
 }
 

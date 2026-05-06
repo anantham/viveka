@@ -3,7 +3,7 @@ import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
 import { mergeFragments, updateFragmentContent } from "@/lib/workspace";
 import { queryClaudeCode } from "@/lib/claude";
 
-type MergeType = "prepend" | "append" | "interleave" | "summarize";
+type MergeType = "prepend" | "append" | "interleave" | "summarize" | "insert";
 
 const MERGE_SYSTEM_PROMPT = `You are merging two text fragments into a single coherent piece. Output only the merged text, no commentary, no preamble.`;
 
@@ -11,8 +11,24 @@ function buildMergePrompt(
   sourceContent: string,
   targetContent: string,
   mergeType: MergeType,
+  insertOffset?: number,
 ): string {
-  const instructions: Record<MergeType, string> = {
+  if (mergeType === "insert" && typeof insertOffset === "number") {
+    const before = targetContent.slice(0, insertOffset);
+    const after = targetContent.slice(insertOffset);
+    return `Merge type: insert
+Instructions: Splice Fragment A into Fragment B at the marked insertion point. Lightly edit for flow at the seam so the result reads naturally — adjust connector phrases and punctuation only as needed. Do not rewrite either fragment beyond minimal stitching.
+
+--- Fragment A (source, being inserted) ---
+${sourceContent}
+
+--- Fragment B (target, with insertion point marked) ---
+${before}<<INSERT FRAGMENT A HERE>>${after}
+
+Produce the merged text:`;
+  }
+
+  const instructions: Record<Exclude<MergeType, "insert">, string> = {
     prepend: "Fragment A comes before Fragment B. Lightly edit for flow and coherence.",
     append: "Fragment B comes after Fragment A. Lightly edit for flow and coherence.",
     interleave: "Weave sentences from both fragments together thematically, preserving key ideas from each.",
@@ -20,7 +36,7 @@ function buildMergePrompt(
   };
 
   return `Merge type: ${mergeType}
-Instructions: ${instructions[mergeType]}
+Instructions: ${instructions[mergeType as Exclude<MergeType, "insert">]}
 
 --- Fragment A (source, being dragged) ---
 ${sourceContent}
@@ -32,11 +48,12 @@ Produce the merged text:`;
 }
 
 export async function POST(req: NextRequest) {
-  const { treeId, sourceId, targetId, mergeType } = await req.json() as {
+  const { treeId, sourceId, targetId, mergeType, insertOffset } = await req.json() as {
     treeId: string;
     sourceId: string;
     targetId: string;
     mergeType: MergeType;
+    insertOffset?: number;
   };
 
   console.log(`[merge] request: treeId=${treeId?.slice(0, 8)} source=${sourceId?.slice(0, 8)} target=${targetId?.slice(0, 8)} type=${mergeType}`);
@@ -55,7 +72,7 @@ export async function POST(req: NextRequest) {
   // eagerly inside mergeFragments; find it and decorate.
   const startedAt = mergedFrag.timing!.startedAt;
   const startMs = Date.now();
-  const prompt = buildMergePrompt(sourceContent, targetContent, mergeType);
+  const prompt = buildMergePrompt(sourceContent, targetContent, mergeType, insertOffset);
   const mergeOp = ws.opLog.find(
     (op) => op.type === "merge" && op.resultId === mergedFrag.id,
   );

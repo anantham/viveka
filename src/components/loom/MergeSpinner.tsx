@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export type MergeType = "prepend" | "append" | "interleave" | "summarize";
+export type MergeType = "prepend" | "append" | "interleave" | "summarize" | "insert";
 
 export const MERGE_COLORS: Record<MergeType, string> = {
   append: "#3b82f6",     // blue
   prepend: "#f59e0b",    // amber
   interleave: "#8b5cf6", // violet
   summarize: "#14b8a6",  // teal
+  insert: "#10b981",     // emerald
 };
 
 // Same colors as RGB triples so we can compose with alpha at render time.
@@ -17,6 +18,7 @@ export const MERGE_COLORS_RGB: Record<MergeType, string> = {
   prepend: "245, 158, 11",
   interleave: "139, 92, 246",
   summarize: "20, 184, 166",
+  insert: "16, 185, 129",
 };
 
 const MERGE_LABELS: Record<MergeType, string> = {
@@ -24,6 +26,7 @@ const MERGE_LABELS: Record<MergeType, string> = {
   prepend: "prepend",
   interleave: "weave",
   summarize: "distill",
+  insert: "insert",
 };
 
 const MERGE_DESCRIPTIONS: Record<MergeType, string> = {
@@ -31,6 +34,7 @@ const MERGE_DESCRIPTIONS: Record<MergeType, string> = {
   prepend: "A before B, lightly stitched",
   interleave: "sentences from both, woven",
   summarize: "distilled into shorter synthesis",
+  insert: "splice A into B at caret",
 };
 
 interface MergeSpinnerProps {
@@ -42,11 +46,12 @@ interface MergeSpinnerProps {
   durationMs: number;
   mergeType: MergeType;
   confirmed: boolean;
+  insertOffset?: number;
 }
 
 export function MergeSpinner({
   x, y, nodeWidth, nodeHeight,
-  startedAt, durationMs, mergeType, confirmed,
+  startedAt, durationMs, mergeType, confirmed, insertOffset,
 }: MergeSpinnerProps) {
   const [progress, setProgress] = useState(0);
   const rafRef = useRef<number | null>(null);
@@ -136,7 +141,11 @@ export function MergeSpinner({
           className="text-[12px] font-semibold tracking-wide whitespace-nowrap"
           style={{ color }}
         >
-          {confirmed ? "merging…" : `merge ▸ ${label}`}
+          {confirmed
+            ? "merging…"
+            : mergeType === "insert" && insertOffset !== undefined
+              ? `merge ▸ insert @ ${insertOffset}`
+              : `merge ▸ ${label}`}
         </div>
         {!confirmed && (
           <div className="text-[9px] text-stone-500 mt-0.5 whitespace-nowrap">

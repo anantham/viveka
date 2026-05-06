@@ -54,6 +54,19 @@ const SECTIONS: Section[] = [
         description: "Summarize — distill both into shorter synthesis.",
       },
       {
+        key: (
+          <span className="inline-flex items-center gap-1">
+            <span className="font-mono text-stone-300">●</span>
+            <span
+              className="inline-block w-2 h-2 rounded-full"
+              style={{ backgroundColor: "rgb(16, 185, 129)" }}
+            />
+          </span>
+        ),
+        description:
+          "Insert — drop A inside B's text body; vertical position picks the splice point (snaps to ¶ / sentence / word).",
+      },
+      {
         key: <span className="text-stone-400">unmerge badge</span>,
         description: "Auto-shows for 30s after merge; permanent on hover.",
       },
