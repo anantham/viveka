@@ -80,11 +80,12 @@ function wsToLegacyTree(ws: Workspace): ConversationTree {
   };
 }
 
-type View = "chat" | "reader" | "tree" | "split" | "canvas";
+type View = "chat" | "reader" | "tree" | "canvas";
 
 // Cycle order for the view-switcher button. Click cycles forward,
-// shift+click cycles backward, keyboard `V` cycles forward.
-const VIEW_CYCLE: View[] = ["canvas", "reader", "chat", "tree", "split"];
+// shift+click cycles backward, keyboard `V` cycles forward. Split
+// is no longer a view — it's a layout mode (see splitPane state).
+const VIEW_CYCLE: View[] = ["canvas", "reader", "chat", "tree"];
 
 /** An entry in the node-level undo stack. Stores the content before a mutation. */
 interface UndoEntry {
@@ -110,7 +111,11 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [ws, setWs] = useState(initialTree);
   // Legacy tree shape for views that haven't migrated yet
   const tree = wsToLegacyTree(ws);
-  const [view, setView] = useState<View>("split");
+  const [view, setView] = useState<View>("canvas");
+  // Optional second pane. When non-null, layout splits 50/50 with `view`
+  // on the left and `splitPane` on the right. Each pane has its own
+  // cycle button. Default split companion = "chat" (the X-ray).
+  const [splitPane, setSplitPane] = useState<View | null>(null);
   const [input, setInput] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
@@ -122,17 +127,29 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [exporting, setExporting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
 
-  // Cycle through views. Wraps around at both ends.
+  // Cycle through views. Wraps around at both ends. `pane` controls
+  // which slot is being cycled — primary (the main view) or split
+  // (the secondary pane when split layout is on).
   const cycleView = useCallback(
-    (direction: 1 | -1 = 1) => {
-      setView((v) => {
+    (direction: 1 | -1 = 1, pane: "primary" | "split" = "primary") => {
+      const advance = (v: View) => {
         const i = VIEW_CYCLE.indexOf(v);
-        const next = (i + direction + VIEW_CYCLE.length) % VIEW_CYCLE.length;
-        return VIEW_CYCLE[next];
-      });
+        return VIEW_CYCLE[(i + direction + VIEW_CYCLE.length) % VIEW_CYCLE.length];
+      };
+      if (pane === "primary") setView(advance);
+      else setSplitPane((v) => (v ? advance(v) : "chat"));
     },
     [],
   );
+
+  const toggleSplit = useCallback(() => {
+    setSplitPane((cur) => {
+      if (cur) return null;
+      // Default: pair with chat (the x-ray) if not already viewing chat,
+      // otherwise pair with canvas. The "useful complement" heuristic.
+      return view === "chat" ? "canvas" : "chat";
+    });
+  }, [view]);
   const [fullscreen, setFullscreen] = useState(false);
   const [exportResult, setExportResult] = useState<{ path?: string; error?: string } | null>(null);
   const prevHasGenerating = useRef(false);
@@ -614,15 +631,20 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
         return;
       }
 
-      const viewMap: Record<string, View> = { "1": "chat", "2": "reader", "3": "split", "4": "tree", "5": "canvas" };
+      const viewMap: Record<string, View> = { "1": "chat", "2": "reader", "3": "tree", "4": "canvas" };
       if (viewMap[e.key]) {
         e.preventDefault();
         setView(viewMap[e.key]);
       }
+      // Cmd+\ toggles split layout (mnemonic: \ visually splits a screen)
+      if (e.key === "\\") {
+        e.preventDefault();
+        toggleSplit();
+      }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [handleUndo, cycleView]);
+  }, [handleUndo, cycleView, toggleSplit]);
 
   // Navigate siblings with arrow keys
   const handleNavigateSibling = async (direction: "prev" | "next") => {
@@ -719,13 +741,34 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
             ?
           </button>
           <button
-            onClick={(e) => cycleView(e.shiftKey ? -1 : 1)}
+            onClick={(e) => cycleView(e.shiftKey ? -1 : 1, "primary")}
             className="text-xs px-2 py-0.5 rounded border border-stone-500 text-stone-300 hover:text-stone-200 transition-colors min-w-[88px] flex items-center justify-between gap-2"
             title="Cycle view (V) · shift+click reverses"
           >
             <span>{view}</span>
             <span className="text-stone-500 text-[10px]">▸</span>
           </button>
+          <button
+            onClick={toggleSplit}
+            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+              splitPane
+                ? "border-stone-500 text-stone-300"
+                : "border-stone-700 text-stone-600 hover:text-stone-400"
+            }`}
+            title="Toggle split layout (⌘\\)"
+          >
+            split
+          </button>
+          {splitPane && (
+            <button
+              onClick={(e) => cycleView(e.shiftKey ? -1 : 1, "split")}
+              className="text-xs px-2 py-0.5 rounded border border-stone-500 text-stone-300 hover:text-stone-200 transition-colors min-w-[88px] flex items-center justify-between gap-2"
+              title="Cycle right pane · shift+click reverses"
+            >
+              <span>{splitPane}</span>
+              <span className="text-stone-500 text-[10px]">▸</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -783,94 +826,86 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
         </div>
       )}
 
-      {/* Main content */}
+      {/* Main content. Single pane → that view fills width.
+          Split → primary view on left, splitPane on right (50/50). */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Canvas view — workspace-native */}
-        {view === "canvas" && (
-          <div className="w-full h-full">
-            <WorkspaceCanvas
-              workspace={ws}
-              onSplitRange={handleSplitRange}
-              onMoveFragment={handleMoveFragment}
-              onZoneTransfer={handleZoneTransfer}
-              onEdit={handleEdit}
-              onGenerate={handleExtend}
-              onReplace={handleReplace}
-              onCommitPhraseEdit={handleCommitPhraseEdit}
-              onCommitExtend={handleCommitExtend}
-              onUnmerge={handleUnmerge}
-              onSubmitMessage={sendUserMessage}
-              onSelectFragment={async (fragId) => {
-                // Add unplaced fragment to sequence
-                await fetch("/api/tree/zone", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ treeId: ws.id, fragmentId: fragId, toZone: "workspace" }),
-                });
-                await refreshTree();
-              }}
-              onRefresh={refreshTree}
-              isGenerating={hasGenerating}
-                />
-            <button
-              onClick={() => setFullscreen(true)}
-              className="absolute bottom-16 right-3 z-40 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200"
-            >
-              ⤢
-            </button>
-          </div>
-        )}
-
-        {/* Chat view = the machinery x-ray (prompts, context assembly,
-            opLog timeline). Pure projection of the canonical Workspace. */}
-        {view === "chat" && (
-          <ChatView ws={ws} onFragmentClick={handleNodeSelect} />
-        )}
-
-        {/* Reader view — full width, fragment editing surface */}
-        {view === "reader" && (
-          <div className="w-full overflow-y-auto">
-            <ReaderView
-              nodes={activePath}
-              onEdit={handleEdit}
-              onNodeClick={handleNodeSelect}
-              onSplitRange={handleSplitRange}
-              onMoveToStage={(nodeId) => handleZoneTransfer(nodeId, "stage")}
-              siblingCounts={siblingCounts}
-              onNavigateSibling={async (nodeId, direction) => {
-                const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);
-                const idx = sibs.findIndex((n) => n.id === nodeId);
-                const nextIdx = direction === "next"
-                  ? (idx + 1) % sibs.length
-                  : (idx - 1 + sibs.length) % sibs.length;
-                if (sibs[nextIdx]) await handleNodeSelect(sibs[nextIdx].id);
-              }}
-            />
-          </div>
-        )}
-
-        {/* Split mode = ChatView (machinery x-ray) on the left, TreeMap
-            on the right. Phase 5 will let the user pick the pairing;
-            for now this is the canonical "see what you've made AND
-            what the model sees" combo. */}
-        {view === "split" && (
-          <div className="w-1/2 border-r border-stone-800 overflow-y-auto">
-            <ChatView ws={ws} onFragmentClick={handleNodeSelect} />
-          </div>
-        )}
-
-        {/* Tree map view */}
-        {(view === "tree" || view === "split") && (
-          <div
-            className={`${view === "split" ? "w-1/2" : "w-full"} overflow-auto bg-stone-950`}
-          >
-            <TreeView ws={ws} onSelect={handleNodeSelect} />
-          </div>
-        )}
+        {(splitPane ? [view, splitPane] : [view]).map((paneView, paneIdx) => {
+          const isSplit = !!splitPane;
+          const wrapperClass = isSplit
+            ? `w-1/2 ${paneIdx === 0 ? "border-r border-stone-800" : ""} overflow-hidden flex flex-col relative`
+            : "w-full h-full overflow-hidden flex flex-col relative";
+          return (
+            <div key={`pane-${paneIdx}-${paneView}`} className={wrapperClass}>
+              {paneView === "canvas" && (
+                <div className="w-full h-full relative">
+                  <WorkspaceCanvas
+                    workspace={ws}
+                    onSplitRange={handleSplitRange}
+                    onMoveFragment={handleMoveFragment}
+                    onZoneTransfer={handleZoneTransfer}
+                    onEdit={handleEdit}
+                    onGenerate={handleExtend}
+                    onReplace={handleReplace}
+                    onCommitPhraseEdit={handleCommitPhraseEdit}
+                    onCommitExtend={handleCommitExtend}
+                    onUnmerge={handleUnmerge}
+                    onSubmitMessage={sendUserMessage}
+                    onSelectFragment={async (fragId) => {
+                      await fetch("/api/tree/zone", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ treeId: ws.id, fragmentId: fragId, toZone: "workspace" }),
+                      });
+                      await refreshTree();
+                    }}
+                    onRefresh={refreshTree}
+                    isGenerating={hasGenerating}
+                  />
+                  {!isSplit && (
+                    <button
+                      onClick={() => setFullscreen(true)}
+                      className="absolute bottom-16 right-3 z-40 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200"
+                    >
+                      ⤢
+                    </button>
+                  )}
+                </div>
+              )}
+              {paneView === "chat" && (
+                <ChatView ws={ws} onFragmentClick={handleNodeSelect} />
+              )}
+              {paneView === "reader" && (
+                <div className="w-full overflow-y-auto">
+                  <ReaderView
+                    nodes={activePath}
+                    onEdit={handleEdit}
+                    onNodeClick={handleNodeSelect}
+                    onSplitRange={handleSplitRange}
+                    onMoveToStage={(nodeId) => handleZoneTransfer(nodeId, "stage")}
+                    siblingCounts={siblingCounts}
+                    onNavigateSibling={async (nodeId, direction) => {
+                      const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);
+                      const idx = sibs.findIndex((n) => n.id === nodeId);
+                      const nextIdx = direction === "next"
+                        ? (idx + 1) % sibs.length
+                        : (idx - 1 + sibs.length) % sibs.length;
+                      if (sibs[nextIdx]) await handleNodeSelect(sibs[nextIdx].id);
+                    }}
+                  />
+                </div>
+              )}
+              {paneView === "tree" && (
+                <div className="w-full h-full overflow-auto bg-stone-950">
+                  <TreeView ws={ws} onSelect={handleNodeSelect} />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Action bar — hidden in canvas view (canvas has its own input) */}
-      <div className={`border-t border-stone-800 bg-stone-900/50 ${view === "canvas" ? "hidden" : ""}`}>
+      <div className={`border-t border-stone-800 bg-stone-900/50 ${view === "canvas" || splitPane === "canvas" ? "hidden" : ""}`}>
        <div className="max-w-4xl mx-auto w-full">
         {/* Quick actions */}
         <div className="px-4 py-2 flex gap-2 border-b border-stone-800/50">
