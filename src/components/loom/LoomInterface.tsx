@@ -14,6 +14,7 @@ import PatternOverlay from "../PatternOverlay";
 import UsageMeters from "../UsageMeters";
 import ContextPanel from "../ContextPanel";
 import LLMSettings from "../LLMSettings";
+import HelpOverlay from "./HelpOverlay";
 
 interface LoomInterfaceProps {
   initialTree: Workspace;
@@ -115,6 +116,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [contextBlocks, setContextBlocks] = useState<ContextBlock[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [exportResult, setExportResult] = useState<{ path?: string; error?: string } | null>(null);
   const prevHasGenerating = useRef(false);
@@ -660,6 +662,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
 
   return (
     <div className={`flex flex-col h-screen mx-auto ${view === "canvas" ? "max-w-none w-full" : "max-w-5xl"}`}>
+      {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-stone-800">
         <div className="flex items-center gap-4">
@@ -684,6 +687,13 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
             title="Toggle context panel"
           >
             ctx
+          </button>
+          <button
+            onClick={() => setShowHelp(true)}
+            className="text-xs px-2 py-0.5 rounded border border-stone-700 text-stone-600 hover:text-stone-400 transition-colors font-mono"
+            title="Show canvas gestures and shortcuts"
+          >
+            ?
           </button>
           <button
             onClick={handleExportToObsidian}

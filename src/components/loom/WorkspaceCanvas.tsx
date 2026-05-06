@@ -104,7 +104,7 @@ function MergeOrGenerateProgress({ fragment }: { fragment: Fragment }) {
 // without having to hover. The same action is also reachable via the
 // hover toolbar later, but the flash window means an "oh that's not
 // what I wanted" reaction has an obvious target.
-const UNMERGE_FLASH_MS = 8000;
+const UNMERGE_FLASH_MS = 30000;
 function UnmergeFlashBadge({
   fragmentId,
   completedAtIso,
