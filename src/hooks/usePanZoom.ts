@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { computeFitToBox } from "@/lib/canvas-utils";
 
 interface PanZoomState {
   panX: number;
@@ -133,11 +134,6 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
     setState({ panX: 0, panY: 0, zoom: 1 });
   }, []);
 
-  // Fit a content bounding box (in canvas-content coordinates, before pan/zoom)
-  // into the viewport, with optional padding. Pan + zoom are computed so the
-  // bbox is centered. `maxFitZoom` caps the auto-zoom-in case so a single
-  // tiny fragment doesn't fill the whole screen — defaults to 1.5x; the
-  // user can still zoom in further manually.
   const fitToBox = useCallback(
     (
       bbox: { minX: number; minY: number; maxX: number; maxY: number },
@@ -145,22 +141,9 @@ export function usePanZoom(options: UsePanZoomOptions = {}) {
       paddingFraction = 0.1,
       maxFitZoom = 1.5
     ) => {
-      const bboxW = Math.max(1, bbox.maxX - bbox.minX);
-      const bboxH = Math.max(1, bbox.maxY - bbox.minY);
-      const padX = viewport.width * paddingFraction;
-      const padY = viewport.height * paddingFraction;
-      const availW = Math.max(1, viewport.width - 2 * padX);
-      const availH = Math.max(1, viewport.height - 2 * padY);
-      const rawZoom = Math.min(availW / bboxW, availH / bboxH);
-      const fitZoom = Math.min(maxFitZoom, Math.min(maxZoom, Math.max(minZoom, rawZoom)));
-
-      // Pan so that the bbox center lands at the viewport center after zoom
-      const bboxCenterX = (bbox.minX + bbox.maxX) / 2;
-      const bboxCenterY = (bbox.minY + bbox.maxY) / 2;
-      const panX = viewport.width / 2 - fitZoom * bboxCenterX;
-      const panY = viewport.height / 2 - fitZoom * bboxCenterY;
-
-      setState({ panX, panY, zoom: fitZoom });
+      setState(
+        computeFitToBox({ bbox, viewport, paddingFraction, maxFitZoom, minZoom, maxZoom }),
+      );
     },
     [minZoom, maxZoom]
   );

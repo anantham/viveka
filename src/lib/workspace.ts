@@ -436,6 +436,249 @@ export function splitFragment(
 }
 
 // ---------------------------------------------------------------------------
+// Merge / Unmerge
+// ---------------------------------------------------------------------------
+
+export interface MergeResult {
+  mergedFrag: Fragment;
+  sourceContent: string;
+  targetContent: string;
+}
+
+/**
+ * Merge two fragments into a new "merged" fragment.
+ *
+ * Creates a pending fragment (status: "generating") whose content the
+ * caller is expected to fill in via an LLM call. All synchronous state
+ * mutations happen here:
+ *   - source/target stashed to previousVersions, hidden as "[merged into X]"
+ *   - merged fragment replaces target in sequence/stage (or source if
+ *     target wasn't placed)
+ *   - canvas position inherited from target (fallback: source)
+ *   - opLog gets a "merge" entry with preMergeSnapshot for unmerge
+ *
+ * Returns null if either fragment is missing.
+ */
+export function mergeFragments(
+  ws: Workspace,
+  sourceId: string,
+  targetId: string,
+): MergeResult | null {
+  const sourceFrag = ws.fragments[sourceId];
+  const targetFrag = ws.fragments[targetId];
+  if (!sourceFrag || !targetFrag) return null;
+
+  const sourceContent = sourceFrag.content;
+  const targetContent = targetFrag.content;
+
+  // Capture pre-mutation membership and indices. CRITICAL: read indices
+  // BEFORE mutating ws.sequence below — otherwise indexOf returns -1 and
+  // the unmerge restore-order sort becomes meaningless.
+  const sourceInSequence = ws.sequence.includes(sourceId);
+  const sourceInStage = ws.stageIds.includes(sourceId);
+  const targetInSequence = ws.sequence.includes(targetId);
+  const targetInStage = ws.stageIds.includes(targetId);
+  const preSourceSeqIdx = ws.sequence.indexOf(sourceId);
+  const preTargetSeqIdx = ws.sequence.indexOf(targetId);
+
+  const startedAtIso = new Date().toISOString();
+  const mergedFrag = addFragment(
+    ws,
+    "",
+    { type: "merged", sourceFragmentIds: [sourceId, targetId] },
+    "generating",
+  );
+  mergedFrag.timing = { startedAt: startedAtIso, completedAt: "", durationMs: 0 };
+
+  addEdge(ws, sourceId, mergedFrag.id, "derived");
+  addEdge(ws, targetId, mergedFrag.id, "derived");
+
+  const nextSequence: string[] = [];
+  for (const id of ws.sequence) {
+    if (id === targetId) {
+      nextSequence.push(mergedFrag.id);
+      continue;
+    }
+    if (id === sourceId) {
+      if (!targetInSequence && !targetInStage && sourceInSequence) {
+        nextSequence.push(mergedFrag.id);
+      }
+      continue;
+    }
+    nextSequence.push(id);
+  }
+
+  const nextStageIds: string[] = [];
+  for (const id of ws.stageIds) {
+    if (id === targetId) {
+      nextStageIds.push(mergedFrag.id);
+      continue;
+    }
+    if (id === sourceId) {
+      if (!targetInSequence && !targetInStage && sourceInStage) {
+        nextStageIds.push(mergedFrag.id);
+      }
+      continue;
+    }
+    nextStageIds.push(id);
+  }
+
+  if (!targetInSequence && !targetInStage && !sourceInSequence && !sourceInStage) {
+    nextSequence.push(mergedFrag.id);
+  }
+
+  ws.sequence = nextSequence;
+  ws.stageIds = nextStageIds;
+
+  if (ws.canvasPositions[targetId]) {
+    ws.canvasPositions[mergedFrag.id] = { ...ws.canvasPositions[targetId] };
+  } else if (ws.canvasPositions[sourceId]) {
+    ws.canvasPositions[mergedFrag.id] = { ...ws.canvasPositions[sourceId] };
+  }
+  delete ws.canvasPositions[sourceId];
+  delete ws.canvasPositions[targetId];
+
+  sourceFrag.previousVersions.push(sourceFrag.content);
+  targetFrag.previousVersions.push(targetFrag.content);
+  sourceFrag.status = "pending";
+  sourceFrag.content = `[merged into ${mergedFrag.id}]`;
+  targetFrag.status = "pending";
+  targetFrag.content = `[merged into ${mergedFrag.id}]`;
+
+  ws.opLog.push({
+    type: "merge",
+    sourceIds: [sourceId, targetId],
+    resultId: mergedFrag.id,
+    timestamp: startedAtIso,
+    preMergeSnapshot: {
+      sourceWasInSequence: sourceInSequence,
+      targetWasInSequence: targetInSequence,
+      sourceWasInStage: sourceInStage,
+      targetWasInStage: targetInStage,
+      preSourceSeqIdx,
+      preTargetSeqIdx,
+    },
+  });
+
+  return { mergedFrag, sourceContent, targetContent };
+}
+
+export interface UnmergeResult {
+  ok: boolean;
+  restoredIds: string[];
+  error?: string;
+}
+
+/**
+ * Reverse a merge: restore source fragments' contents from
+ * previousVersions, put them back into sequence/stage at roughly their
+ * original positions (using preMergeSnapshot), and delete the merged
+ * fragment along with its derivation edges.
+ */
+export function unmergeFragments(ws: Workspace, mergedId: string): UnmergeResult {
+  const mergedFrag = ws.fragments[mergedId];
+  if (!mergedFrag) return { ok: false, restoredIds: [], error: "Merged fragment not found" };
+  if (mergedFrag.provenance.type !== "merged") {
+    return { ok: false, restoredIds: [], error: "Fragment is not a merged result" };
+  }
+
+  const sourceIds = mergedFrag.provenance.sourceFragmentIds ?? [];
+  if (sourceIds.length === 0) {
+    return { ok: false, restoredIds: [], error: "No source fragments to restore" };
+  }
+
+  // Find the most recent merge op for this resultId — it carries the snapshot.
+  let snapshot: Extract<Operation, { type: "merge" }>["preMergeSnapshot"] = undefined;
+  for (let i = ws.opLog.length - 1; i >= 0; i--) {
+    const op = ws.opLog[i];
+    if (op.type === "merge" && op.resultId === mergedId) {
+      snapshot = op.preMergeSnapshot;
+      break;
+    }
+  }
+
+  // Restore each source's content from previousVersions.
+  const restored: string[] = [];
+  for (const sid of sourceIds) {
+    const src = ws.fragments[sid];
+    if (!src) continue;
+    if (src.previousVersions.length > 0) {
+      src.content = src.previousVersions.pop()!;
+      src.status = "complete";
+      restored.push(sid);
+    }
+  }
+
+  // Helpers: pull snapshot membership flags for either source.
+  const wasInSequence = (id: string) =>
+    !!snapshot &&
+    ((id === sourceIds[0] && snapshot.sourceWasInSequence) ||
+      (id === sourceIds[1] && snapshot.targetWasInSequence));
+  const wasInStage = (id: string) =>
+    !!snapshot &&
+    ((id === sourceIds[0] && snapshot.sourceWasInStage) ||
+      (id === sourceIds[1] && snapshot.targetWasInStage));
+
+  // Determine ordered list of sources to restore in sequence (by original idx).
+  const seqRestorations: string[] = [];
+  if (snapshot) {
+    const ordered = [...sourceIds].sort((a, b) => {
+      const idxA = a === sourceIds[0] ? snapshot!.preSourceSeqIdx : snapshot!.preTargetSeqIdx;
+      const idxB = b === sourceIds[0] ? snapshot!.preSourceSeqIdx : snapshot!.preTargetSeqIdx;
+      return idxA - idxB;
+    });
+    for (const id of ordered) {
+      if (wasInSequence(id) && ws.fragments[id]) seqRestorations.push(id);
+    }
+  } else {
+    for (const id of sourceIds) {
+      if (ws.fragments[id]) seqRestorations.push(id);
+    }
+  }
+
+  // Determine ordered list of sources to restore in stage.
+  const stageRestorations: string[] = [];
+  if (snapshot) {
+    for (const id of sourceIds) {
+      if (wasInStage(id) && ws.fragments[id]) stageRestorations.push(id);
+    }
+  }
+
+  // Splice into sequence: replace merged-id slot if present, otherwise append.
+  const mergedSeqIdx = ws.sequence.indexOf(mergedId);
+  if (mergedSeqIdx !== -1) {
+    ws.sequence.splice(mergedSeqIdx, 1, ...seqRestorations);
+  } else {
+    for (const id of seqRestorations) {
+      if (!ws.sequence.includes(id)) ws.sequence.push(id);
+    }
+  }
+
+  // Splice into stage: replace merged-id slot if present, otherwise append.
+  const mergedStageIdx = ws.stageIds.indexOf(mergedId);
+  if (mergedStageIdx !== -1) {
+    ws.stageIds.splice(mergedStageIdx, 1, ...stageRestorations);
+  } else {
+    for (const id of stageRestorations) {
+      if (!ws.stageIds.includes(id)) ws.stageIds.push(id);
+    }
+  }
+
+  delete ws.fragments[mergedId];
+  ws.edges = ws.edges.filter((e) => e.from !== mergedId && e.to !== mergedId);
+  delete ws.canvasPositions[mergedId];
+
+  ws.opLog.push({
+    type: "unmerge",
+    mergedId,
+    restoredIds: restored,
+    timestamp: new Date().toISOString(),
+  });
+
+  return { ok: true, restoredIds: restored };
+}
+
+// ---------------------------------------------------------------------------
 // Context assembly (for AI generation)
 // ---------------------------------------------------------------------------
 

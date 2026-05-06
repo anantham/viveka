@@ -8,7 +8,6 @@ import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
 import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
 import MergePreview from "./MergePreview";
 import dagre from "dagre";
-import WordLevelContent from "./WordLevelContent";
 
 type MergeType = "prepend" | "append" | "interleave" | "summarize";
 

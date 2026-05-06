@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getWorkspace, saveWorkspace } from "@/lib/workspace-store";
 import { addFragment, addEdge, getParent } from "@/lib/workspace";
 import { queryClaudeCode } from "@/lib/claude";
+import { filterRerollAlternatives } from "@/lib/reroll-filter";
 
 /**
  * POST /api/tree/reroll-phrase
@@ -87,31 +88,11 @@ export async function POST(req: NextRequest) {
       if (cleaned.startsWith("```")) {
         cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
       }
-      alternatives = JSON.parse(cleaned);
-      if (!Array.isArray(alternatives)) {
+      const parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) {
         throw new Error("Response is not an array");
       }
-      // Filter to non-empty strings only, dedupe, and exclude alternatives
-      // that still contain the original word as a token (model sometimes
-      // ignores the constraint and returns "intentional friction" for
-      // "friction"). Word-boundary check is case-insensitive.
-      const originalWordRe = new RegExp(
-        `\\b${selectedText.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
-        "i"
-      );
-      alternatives = Array.from(
-        new Set(
-          alternatives
-            .filter((a) => typeof a === "string")
-            .map((a) => a.trim())
-            .filter((a) => {
-              if (a.length === 0) return false;
-              if (a === selectedText) return false;
-              if (originalWordRe.test(a)) return false;
-              return true;
-            })
-        )
-      );
+      alternatives = filterRerollAlternatives(parsed, selectedText);
     } catch (parseErr) {
       console.error(
         "[viveka-loom] Failed to parse reroll-phrase response:",

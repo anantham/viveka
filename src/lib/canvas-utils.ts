@@ -1,5 +1,56 @@
 // Canvas utility functions — pure logic, no React dependency
 
+// ---------------------------------------------------------------------------
+// fitToBox math (used by usePanZoom)
+// ---------------------------------------------------------------------------
+
+export interface FitToBoxArgs {
+  bbox: { minX: number; minY: number; maxX: number; maxY: number };
+  viewport: { width: number; height: number };
+  paddingFraction?: number;
+  maxFitZoom?: number;
+  minZoom?: number;
+  maxZoom?: number;
+}
+
+export interface FitToBoxResult {
+  panX: number;
+  panY: number;
+  zoom: number;
+}
+
+/**
+ * Pan + zoom that fits a content bbox (in canvas-content coords, before
+ * pan/zoom) into a viewport. `maxFitZoom` caps the auto-zoom-in case so
+ * a single tiny fragment doesn't fill the whole screen.
+ */
+export function computeFitToBox(args: FitToBoxArgs): FitToBoxResult {
+  const {
+    bbox,
+    viewport,
+    paddingFraction = 0.1,
+    maxFitZoom = 1.5,
+    minZoom = 0.15,
+    maxZoom = 3,
+  } = args;
+
+  const bboxW = Math.max(1, bbox.maxX - bbox.minX);
+  const bboxH = Math.max(1, bbox.maxY - bbox.minY);
+  const padX = viewport.width * paddingFraction;
+  const padY = viewport.height * paddingFraction;
+  const availW = Math.max(1, viewport.width - 2 * padX);
+  const availH = Math.max(1, viewport.height - 2 * padY);
+  const rawZoom = Math.min(availW / bboxW, availH / bboxH);
+  const fitZoom = Math.min(maxFitZoom, Math.min(maxZoom, Math.max(minZoom, rawZoom)));
+
+  const bboxCenterX = (bbox.minX + bbox.maxX) / 2;
+  const bboxCenterY = (bbox.minY + bbox.maxY) / 2;
+  const panX = viewport.width / 2 - fitZoom * bboxCenterX;
+  const panY = viewport.height / 2 - fitZoom * bboxCenterY;
+
+  return { panX, panY, zoom: fitZoom };
+}
+
 export type CursorTool = "select" | "tangent" | "hand";
 
 export interface NodePosition {
