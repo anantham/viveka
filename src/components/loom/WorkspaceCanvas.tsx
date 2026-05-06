@@ -1571,15 +1571,18 @@ export default function WorkspaceCanvas({
             </div>
           )}
 
-          {/* Stage zone indicator */}
-          {(stageFragments.length > 0 || unplacedFragments.length > 0) && (
+          {/* Stage zone indicator. Only renders when there's something
+              actually staged. Unplaced fragments (alt siblings) are
+              deliberately not rendered on canvas (they live in tree
+              view), so they shouldn't trigger the stage box either. */}
+          {stageFragments.length > 0 && (
             <div
               className="absolute border border-dashed border-amber-900/30 rounded-2xl pointer-events-none"
               style={{
                 left: STAGE_X_OFFSET - 20,
                 top: 10,
                 width: nodeWidth + 40,
-                height: [...stageFragments, ...unplacedFragments].reduce(
+                height: stageFragments.reduce(
                   (acc, f) => acc + heightFor(f) + 20, 40
                 ),
                 minHeight: 80,
