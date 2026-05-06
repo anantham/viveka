@@ -5,7 +5,7 @@ import type { Workspace, Fragment } from "@/lib/workspace";
 import { getSiblings as getWsSiblings, getChildren, getWorkspaceContext } from "@/lib/workspace";
 import type { TreeNode, ConversationTree } from "@/lib/tree";
 import { Session, ContextBlock, estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
-import ChatBubbleView from "./ChatBubbleView";
+import ChatView from "./ChatView";
 import ReaderView from "./ReaderView";
 import TreeMapView from "./TreeMapView";
 import CanvasView from "./CanvasView";
@@ -821,26 +821,10 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </div>
         )}
 
-        {/* Reader view (chat mode = full reading surface) */}
+        {/* Chat view = the machinery x-ray (prompts, context assembly,
+            opLog timeline). Pure projection of the canonical Workspace. */}
         {view === "chat" && (
-          <div className="w-full overflow-y-auto">
-            <ReaderView
-              nodes={activePath}
-              onEdit={handleEdit}
-              onNodeClick={handleNodeSelect}
-              onSplitRange={handleSplitRange}
-              onMoveToStage={(nodeId) => handleZoneTransfer(nodeId, "stage")}
-              siblingCounts={siblingCounts}
-              onNavigateSibling={async (nodeId, direction) => {
-                const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);
-                const idx = sibs.findIndex((n) => n.id === nodeId);
-                const nextIdx = direction === "next"
-                  ? (idx + 1) % sibs.length
-                  : (idx - 1 + sibs.length) % sibs.length;
-                if (sibs[nextIdx]) await handleNodeSelect(sibs[nextIdx].id);
-              }}
-            />
-          </div>
+          <ChatView ws={ws} onFragmentClick={handleNodeSelect} />
         )}
 
         {/* Reader view — full width, fragment editing surface */}
@@ -865,62 +849,13 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </div>
         )}
 
-        {/* Chat bubble view (split mode = compact bubbles on left half) */}
+        {/* Split mode = ChatView (machinery x-ray) on the left, TreeMap
+            on the right. Phase 5 will let the user pick the pairing;
+            for now this is the canonical "see what you've made AND
+            what the model sees" combo. */}
         {view === "split" && (
           <div className="w-1/2 border-r border-stone-800 overflow-y-auto">
-            <ChatBubbleView
-              nodes={activePath}
-              onNodeClick={handleNodeSelect}
-              onEdit={handleEdit}
-              siblingCounts={siblingCounts}
-              editingId={editingId}
-              onEditStart={setEditingId}
-              onEditCancel={() => setEditingId(null)}
-            />
-
-            {/* Sibling navigation for last node */}
-            {lastNode && siblingCounts[lastNode.id] > 1 && (
-              <div className="flex items-center justify-center gap-3 py-2">
-                <button
-                  onClick={() => handleNavigateSibling("prev")}
-                  className="text-xs text-stone-600 hover:text-stone-400 px-2 py-1 border border-stone-700 rounded"
-                >
-                  ← prev
-                </button>
-                <span className="text-xs text-stone-600">
-                  {getSiblings(tree, lastNode.id).findIndex(
-                    (n) => n.id === lastNode.id
-                  ) + 1}
-                  /{siblingCounts[lastNode.id]}
-                </span>
-                <button
-                  onClick={() => handleNavigateSibling("next")}
-                  className="text-xs text-stone-600 hover:text-stone-400 px-2 py-1 border border-stone-700 rounded"
-                >
-                  next →
-                </button>
-              </div>
-            )}
-
-            {/* Pattern detection overlays for the last exchange */}
-            {virtualSession && virtualSession.exchanges.length > 0 && (
-              <div className="px-4 pb-2">
-                <PatternOverlay
-                  heuristics={
-                    virtualSession.exchanges[virtualSession.exchanges.length - 1]
-                      .heuristicFlags
-                  }
-                  classifier={
-                    virtualSession.exchanges[virtualSession.exchanges.length - 1]
-                      .classifierFlags
-                  }
-                  intervention={
-                    virtualSession.exchanges[virtualSession.exchanges.length - 1]
-                      .interventionShown
-                  }
-                />
-              </div>
-            )}
+            <ChatView ws={ws} onFragmentClick={handleNodeSelect} />
           </div>
         )}
 
