@@ -116,6 +116,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (isEphemeral) {
+      // Log the reroll even though no persistent fragments were created
+      // — the prompt was sent to the model, ChatView's x-ray should
+      // show every model interaction.
+      ws.opLog.push({
+        type: "reroll",
+        sourceFragmentId: nodeId,
+        resultIds: [],
+        model: ws.settings.model,
+        timestamp: new Date().toISOString(),
+        selectedText,
+        prompt,
+      });
+      saveWorkspace(ws);
+
       console.log(
         `[viveka-loom] reroll-phrase ephemeral: ${alternatives.length} alternatives for node ${nodeId.slice(0, 8)}`
       );
@@ -140,6 +154,15 @@ export async function POST(req: NextRequest) {
       addEdge(ws, nodeId, sibling.id, "derived");
       siblingNodeIds.push(sibling.id);
     }
+    ws.opLog.push({
+      type: "reroll",
+      sourceFragmentId: nodeId,
+      resultIds: siblingNodeIds,
+      model: ws.settings.model,
+      timestamp: new Date().toISOString(),
+      selectedText,
+      prompt,
+    });
     saveWorkspace(ws);
 
     console.log(

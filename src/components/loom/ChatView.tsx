@@ -228,17 +228,46 @@ function OpEntry({
   if (op.type === "merge") {
     const result = ws.fragments[op.resultId];
     return (
-      <div className="px-3 py-2 border border-stone-800 rounded">
-        <div className="flex items-baseline gap-3 text-[10px]">
-          <span className="uppercase tracking-wider text-violet-400/80">merge</span>
-          <span className="text-stone-600 tabular-nums">{ts}</span>
-          <span className="text-stone-700 font-mono">
+      <div className="border border-stone-800 rounded">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="w-full flex items-baseline gap-3 px-3 py-2 text-left hover:bg-stone-900/50 transition-colors"
+        >
+          <span className="uppercase tracking-wider text-[10px] text-violet-400/80">merge</span>
+          {op.mergeType && (
+            <span className="text-[10px] text-stone-700">· {op.mergeType}</span>
+          )}
+          <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
+          {op.model && <span className="text-[10px] text-stone-700">· {op.model}</span>}
+          <span className="text-[10px] text-stone-700 font-mono">
             {op.sourceIds.map(shortId).join(" + ")} → {shortId(op.resultId)}
           </span>
-        </div>
-        {result && (
-          <div className="text-xs text-stone-400 whitespace-pre-wrap leading-relaxed mt-1">
-            {fragmentPreview(result.content)}
+          <span className="text-[10px] text-stone-700 ml-auto">
+            {expanded ? "▾" : "▸"}
+          </span>
+        </button>
+        {expanded && (
+          <div className="px-3 py-2 border-t border-stone-800 space-y-3 bg-stone-950">
+            {op.prompt && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">
+                  prompt
+                </div>
+                <pre className="text-[11px] text-stone-400 whitespace-pre-wrap font-mono leading-relaxed">
+                  {op.prompt}
+                </pre>
+              </div>
+            )}
+            {result && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">
+                  output
+                </div>
+                <div className="text-xs text-stone-300 whitespace-pre-wrap leading-relaxed">
+                  {fragmentPreview(result.content, 800)}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -247,15 +276,34 @@ function OpEntry({
 
   if (op.type === "reroll") {
     return (
-      <div className="px-3 py-2 border border-stone-800 rounded">
-        <div className="flex items-baseline gap-3 text-[10px]">
-          <span className="uppercase tracking-wider text-amber-400/80">reroll</span>
-          <span className="text-stone-600 tabular-nums">{ts}</span>
-          <span className="text-stone-700">· {op.model}</span>
-          <span className="text-stone-700">
-            {op.resultIds.length} alt(s) of {shortId(op.sourceFragmentId)}
+      <div className="border border-stone-800 rounded">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="w-full flex items-baseline gap-3 px-3 py-2 text-left hover:bg-stone-900/50 transition-colors"
+        >
+          <span className="uppercase tracking-wider text-[10px] text-amber-400/80">reroll</span>
+          <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
+          <span className="text-[10px] text-stone-700">· {op.model}</span>
+          {op.selectedText && (
+            <span className="text-[10px] text-stone-500 italic">
+              "{op.selectedText.length > 30 ? op.selectedText.slice(0, 30) + "…" : op.selectedText}"
+            </span>
+          )}
+          <span className="text-[10px] text-stone-700 ml-auto">
+            {op.resultIds.length > 0 ? `${op.resultIds.length} persisted` : "ephemeral"}
+            {" "}{expanded ? "▾" : "▸"}
           </span>
-        </div>
+        </button>
+        {expanded && op.prompt && (
+          <div className="px-3 py-2 border-t border-stone-800 bg-stone-950">
+            <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">
+              prompt
+            </div>
+            <pre className="text-[11px] text-stone-400 whitespace-pre-wrap font-mono leading-relaxed">
+              {op.prompt}
+            </pre>
+          </div>
+        )}
       </div>
     );
   }

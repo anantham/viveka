@@ -50,12 +50,24 @@ export async function POST(req: NextRequest) {
   }
   const { mergedFrag, sourceContent, targetContent } = result;
 
-  saveWorkspace(ws);
-
-  // Fire LLM call (don't await).
+  // Patch the merge op with the prompt + model so ChatView's x-ray
+  // can show what the model actually received. The op was logged
+  // eagerly inside mergeFragments; find it and decorate.
   const startedAt = mergedFrag.timing!.startedAt;
   const startMs = Date.now();
   const prompt = buildMergePrompt(sourceContent, targetContent, mergeType);
+  const mergeOp = ws.opLog.find(
+    (op) => op.type === "merge" && op.resultId === mergedFrag.id,
+  );
+  if (mergeOp && mergeOp.type === "merge") {
+    mergeOp.prompt = prompt;
+    mergeOp.model = ws.settings.model;
+    mergeOp.mergeType = mergeType;
+  }
+
+  saveWorkspace(ws);
+
+  // Fire LLM call (don't await).
 
   queryClaudeCode(prompt, MERGE_SYSTEM_PROMPT, [], { noTools: true })
     .then((response) => {

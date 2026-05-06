@@ -83,6 +83,15 @@ export type Operation =
       sourceIds: string[];
       resultId: string;
       timestamp: string;
+      // The prompt and model used for the LLM merge call. Optional
+      // because we may want to log a merge op before the LLM call (we
+      // do — it lands eagerly so the canvas can show pending merge);
+      // the route patches these fields onto the op once the call is
+      // actually fired. Used by ChatView's x-ray to show what the
+      // model received.
+      prompt?: string;
+      model?: string;
+      mergeType?: string;
       preMergeSnapshot?: {
         sourceWasInSequence: boolean;
         targetWasInSequence: boolean;
@@ -97,7 +106,15 @@ export type Operation =
   | { type: "restore"; fragmentId: string; timestamp: string }
   | { type: "zone-transfer"; fragmentId: string; from: "workspace" | "stage"; to: "workspace" | "stage"; timestamp: string }
   | { type: "pick"; fragmentId: string; timestamp: string }
-  | { type: "reroll"; sourceFragmentId: string; resultIds: string[]; model: string; timestamp: string }
+  | {
+      type: "reroll";
+      sourceFragmentId: string;
+      resultIds: string[];
+      model: string;
+      timestamp: string;
+      selectedText?: string;
+      prompt?: string;
+    }
   | { type: "expand"; sourceFragmentId: string; mode: string; resultIds: string[]; timestamp: string };
 
 // ---------------------------------------------------------------------------
