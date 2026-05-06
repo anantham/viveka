@@ -18,7 +18,12 @@ const BACKEND_LABELS: Record<LLMBackend, string> = {
   openrouter: "OpenRouter",
 };
 
-export default function LLMSettings() {
+interface LLMSettingsProps {
+  onExport?: () => void;
+  exporting?: boolean;
+}
+
+export default function LLMSettings({ onExport, exporting }: LLMSettingsProps = {}) {
   const [open, setOpen] = useState(false);
   const [config, setConfig] = useState<LLMConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -219,6 +224,24 @@ export default function LLMSettings() {
           {/* Status */}
           {status && (
             <div className="text-xs text-stone-500 pt-1">{status}</div>
+          )}
+
+          {/* Actions */}
+          {onExport && (
+            <div className="pt-2 border-t border-stone-800">
+              <div className="text-xs text-stone-400 font-medium uppercase tracking-wider mb-2">
+                Actions
+              </div>
+              <button
+                onClick={() => {
+                  onExport();
+                }}
+                disabled={exporting}
+                className="w-full text-xs px-2 py-1.5 rounded border border-stone-700 text-stone-400 hover:text-stone-200 hover:border-stone-500 disabled:opacity-30 transition-colors text-left"
+              >
+                {exporting ? "exporting..." : "Export to Obsidian"}
+              </button>
+            </div>
           )}
         </div>
       )}

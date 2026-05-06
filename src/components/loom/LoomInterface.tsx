@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { Workspace, Fragment } from "@/lib/workspace";
-import { getSiblings as getWsSiblings, getChildren } from "@/lib/workspace";
+import { getSiblings as getWsSiblings, getChildren, getWorkspaceContext } from "@/lib/workspace";
 import type { TreeNode, ConversationTree } from "@/lib/tree";
 import { Session, ContextBlock, estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
 import ChatBubbleView from "./ChatBubbleView";
@@ -82,6 +82,10 @@ function wsToLegacyTree(ws: Workspace): ConversationTree {
 
 type View = "chat" | "reader" | "tree" | "split" | "canvas";
 
+// Cycle order for the view-switcher button. Click cycles forward,
+// shift+click cycles backward, keyboard `V` cycles forward.
+const VIEW_CYCLE: View[] = ["canvas", "reader", "chat", "tree", "split"];
+
 /** An entry in the node-level undo stack. Stores the content before a mutation. */
 interface UndoEntry {
   nodeId: string;
@@ -117,6 +121,18 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   const [contextBlocks, setContextBlocks] = useState<ContextBlock[]>([]);
   const [exporting, setExporting] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+
+  // Cycle through views. Wraps around at both ends.
+  const cycleView = useCallback(
+    (direction: 1 | -1 = 1) => {
+      setView((v) => {
+        const i = VIEW_CYCLE.indexOf(v);
+        const next = (i + direction + VIEW_CYCLE.length) % VIEW_CYCLE.length;
+        return VIEW_CYCLE[next];
+      });
+    },
+    [],
+  );
   const [fullscreen, setFullscreen] = useState(false);
   const [exportResult, setExportResult] = useState<{ path?: string; error?: string } | null>(null);
   const prevHasGenerating = useRef(false);
@@ -268,33 +284,25 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     }
   };
 
-  // Compute context usage for usage meters
-  const contextUsage = virtualSession
-    ? {
-        contextBlockTokens: contextBlocks
-          .filter((b) => b.enabled)
-          .reduce((sum, b) => sum + b.tokenEstimate, 0),
-        historyTokens: virtualSession.exchanges.reduce(
-          (sum, ex) =>
-            sum +
-            estimateTokens(ex.userMessage) +
-            estimateTokens(ex.systemResponse),
-          0
-        ),
-        totalTokens:
-          virtualSession.exchanges.reduce(
-            (sum, ex) =>
-              sum +
-              estimateTokens(ex.userMessage) +
-              estimateTokens(ex.systemResponse),
-            0
-          ) +
-          contextBlocks
-            .filter((b) => b.enabled)
-            .reduce((sum, b) => sum + b.tokenEstimate, 0),
-        maxTokens: MAX_CONTEXT_TOKENS,
-      }
-    : null;
+  // Compute context usage from the canonical Workspace. The gauge needs
+  // to reflect what the LLM would actually see if the writer generated
+  // next: every fragment in the active sequence + the intent/condition
+  // (which IS the root system fragment in getWorkspaceContext) + any
+  // enabled external context blocks. Independent of view — same number
+  // shows on canvas, chat, reader, tree.
+  const contextBlockTokens = contextBlocks
+    .filter((b) => b.enabled)
+    .reduce((sum, b) => sum + b.tokenEstimate, 0);
+  const historyTokens = getWorkspaceContext(ws).reduce(
+    (sum, f) => sum + estimateTokens(f.content),
+    0,
+  );
+  const contextUsage = {
+    contextBlockTokens,
+    historyTokens,
+    totalTokens: historyTokens + contextBlockTokens,
+    maxTokens: MAX_CONTEXT_TOKENS,
+  };
 
   // Find the last exchange with an active intervention warning
   const lastIntervention = virtualSession?.exchanges
@@ -575,20 +583,32 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     }
   };
 
-  // Cmd+1/2/3/4 to switch views, Cmd+Z to undo
+  // Cmd+1/2/3/4 jumps directly to a view, Cmd+Z undoes,
+  // bare `v` cycles through views (forward; shift+v cycles backward).
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const inField =
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLInputElement;
+
+      // Bare `v` — cycle view. Ignore if typing in a field or with modifiers.
+      if (
+        (e.key === "v" || e.key === "V") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !inField
+      ) {
+        e.preventDefault();
+        cycleView(e.shiftKey ? -1 : 1);
+        return;
+      }
+
       if (!e.metaKey && !e.ctrlKey) return;
 
       // Cmd+Z — undo last node mutation
       if (e.key === "z" && !e.shiftKey) {
-        // Don't intercept if user is typing in an input/textarea
-        if (
-          e.target instanceof HTMLTextAreaElement ||
-          e.target instanceof HTMLInputElement
-        ) {
-          return;
-        }
+        if (inField) return;
         e.preventDefault();
         handleUndo();
         return;
@@ -602,7 +622,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
-  }, [handleUndo]);
+  }, [handleUndo, cycleView]);
 
   // Navigate siblings with arrow keys
   const handleNavigateSibling = async (direction: "prev" | "next") => {
@@ -675,7 +695,10 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <LLMSettings />
+          <LLMSettings
+            onExport={handleExportToObsidian}
+            exporting={exporting}
+          />
           <UsageMeters rateLimit={null} contextUsage={contextUsage} />
           <button
             onClick={() => setShowContextPanel((v) => !v)}
@@ -684,9 +707,9 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
                 ? "border-stone-500 text-stone-300"
                 : "border-stone-700 text-stone-600 hover:text-stone-400"
             }`}
-            title="Toggle context panel"
+            title="Toggle context-blocks panel (paste/file/library refs added to LLM context)"
           >
-            ctx
+            blocks
           </button>
           <button
             onClick={() => setShowHelp(true)}
@@ -696,26 +719,13 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
             ?
           </button>
           <button
-            onClick={handleExportToObsidian}
-            disabled={exporting}
-            className="text-xs px-2 py-0.5 rounded border border-stone-700 text-stone-600 hover:text-stone-400 disabled:opacity-30 transition-colors"
-            title="Export to Obsidian"
+            onClick={(e) => cycleView(e.shiftKey ? -1 : 1)}
+            className="text-xs px-2 py-0.5 rounded border border-stone-500 text-stone-300 hover:text-stone-200 transition-colors min-w-[88px] flex items-center justify-between gap-2"
+            title="Cycle view (V) · shift+click reverses"
           >
-            {exporting ? "exporting..." : "export"}
+            <span>{view}</span>
+            <span className="text-stone-500 text-[10px]">▸</span>
           </button>
-          {(["chat", "reader", "split", "tree", "canvas"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                view === v
-                  ? "border-stone-500 text-stone-300"
-                  : "border-stone-700 text-stone-600 hover:text-stone-400"
-              }`}
-            >
-              {v}
-            </button>
-          ))}
         </div>
       </header>
 
