@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { Workspace, Fragment } from "@/lib/workspace";
 import { buildTreeFromEdges } from "@/lib/workspace";
 import { estimateTokens } from "@/lib/types";
+import MarkdownText from "../MarkdownText";
 
 /**
  * TreeView — structural projection of Workspace via responded-to edges.
@@ -213,10 +214,14 @@ function NodeCard({
         </div>
         <div
           className={`text-[11px] text-stone-200 leading-snug ${
-            isExpanded ? "whitespace-pre-wrap" : "truncate"
+            isExpanded ? "" : "truncate"
           }`}
         >
-          {role === "system" ? "ROOT · " + preview(node.content, 80) : preview(node.content, isExpanded ? 99999 : 80)}
+          {isExpanded && role !== "system" ? (
+            <MarkdownText>{node.content}</MarkdownText>
+          ) : (
+            (role === "system" ? "ROOT · " : "") + preview(node.content, isExpanded ? 99999 : 80)
+          )}
         </div>
         {isExpanded && (
           <div className="mt-2 pt-2 border-t border-stone-800/60 flex items-baseline gap-3 text-[9px] text-stone-500">

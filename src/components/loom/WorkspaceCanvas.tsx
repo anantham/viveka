@@ -8,6 +8,7 @@ import type { MergeCandidateInfo } from "@/hooks/usePhysicsSimulation";
 import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
 import MergePreview from "./MergePreview";
 import dagre from "dagre";
+import MarkdownText from "../MarkdownText";
 
 type MergeType = "prepend" | "append" | "interleave" | "summarize";
 
@@ -150,11 +151,15 @@ function InlineRerollBadge({
   startedAt,
   currentIdx,
   total,
+  spreadLoading,
+  spreadActive,
 }: {
   state: "pending" | "preview" | "committing";
   startedAt: number;
   currentIdx: number;
   total: number;
+  spreadLoading?: boolean;
+  spreadActive?: boolean;
 }) {
   const [, force] = useState(0);
   useEffect(() => {
@@ -186,6 +191,11 @@ function InlineRerollBadge({
       <span className="text-violet-300">←</span>
       <span className="tabular-nums">{currentIdx + 1}/{total}</span>
       <span className="text-violet-300">→</span>
+      {spreadLoading ? (
+        <span className="text-violet-400/80 ml-1 animate-pulse">spreading…</span>
+      ) : spreadActive ? (
+        <span className="text-emerald-300/80 ml-1">spread ✓</span>
+      ) : null}
       <span className="text-violet-500/80 ml-1">↵ pick · esc revert</span>
     </div>
   );
@@ -410,6 +420,13 @@ export default function WorkspaceCanvas({
         alternatives: string[];
         currentIdx: number;
         startedAt: number;
+        // Spread cache: alternative index → LLM-edited fragment content
+        // (with same-connotation occurrences swapped). Filled lazily as
+        // the user lands on each alternative. When present for the
+        // current index, the preview shows the spread version and
+        // commit uses it instead of the literal single-range swap.
+        spreadCache: Record<number, string>;
+        spreadLoading: boolean;
       }
     | {
         mode: "extend";
@@ -422,7 +439,10 @@ export default function WorkspaceCanvas({
   const [inlineAlts, setInlineAlts] = useState<InlineAltsState | null>(null);
 
   // Keyboard shortcuts during an inline-alternatives preview (replace OR
-  // extend). Arrows cycle, Enter commits per-mode, Esc dismisses.
+  // extend). Arrows cycle, Enter commits per-mode, Esc dismisses. For
+  // replace mode, commit prefers the spread-cached LLM-aware edit if
+  // present (which contains same-connotation swaps across the whole
+  // fragment); falls back to the literal single-range swap otherwise.
   useEffect(() => {
     if (!inlineAlts || inlineAlts.state !== "preview") return;
     const handler = (e: KeyboardEvent) => {
@@ -442,7 +462,10 @@ export default function WorkspaceCanvas({
         if (ia.mode === "replace") {
           const frag = ws.fragments[ia.sourceFragmentId];
           if (!frag || !onCommitPhraseEdit) return;
-          const newContent = frag.content.slice(0, ia.charStart) + alt + frag.content.slice(ia.charEnd);
+          const spread = ia.spreadCache[ia.currentIdx];
+          const newContent =
+            spread ??
+            frag.content.slice(0, ia.charStart) + alt + frag.content.slice(ia.charEnd);
           setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
           Promise.resolve(onCommitPhraseEdit(ia.sourceFragmentId, newContent)).finally(() => {
             setInlineAlts(null);
@@ -463,6 +486,55 @@ export default function WorkspaceCanvas({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [inlineAlts, onCommitPhraseEdit, onCommitExtend, ws.fragments]);
+
+  // Fire LLM-aware spread-swap when the user lands on an alternative
+  // (replace mode only). Debounced so rapid cycling doesn't flood the
+  // backend; result is cached per-alternative so cycling back is
+  // instant. The preview renderer prefers the cached spread over the
+  // literal single-range swap when present.
+  useEffect(() => {
+    if (!inlineAlts || inlineAlts.mode !== "replace" || inlineAlts.state !== "preview") return;
+    const ia = inlineAlts;
+    const alt = ia.alternatives[ia.currentIdx];
+    if (!alt) return;
+    if (ia.spreadCache[ia.currentIdx]) return; // already have it
+
+    const sourceId = ia.sourceFragmentId;
+    const idxAtFire = ia.currentIdx;
+    const timer = setTimeout(async () => {
+      setInlineAlts((prev) =>
+        prev && prev.mode === "replace" ? { ...prev, spreadLoading: true } : prev,
+      );
+      try {
+        const res = await fetch("/api/tree/swap-phrase", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            treeId: ws.id,
+            fragmentId: sourceId,
+            originalPhrase: ia.selectedText,
+            alternativePhrase: alt,
+          }),
+        });
+        const data = await res.json();
+        if (!data.editedContent) return;
+        setInlineAlts((prev) => {
+          if (!prev || prev.mode !== "replace" || prev.sourceFragmentId !== sourceId) return prev;
+          return {
+            ...prev,
+            spreadLoading: false,
+            spreadCache: { ...prev.spreadCache, [idxAtFire]: data.editedContent },
+          };
+        });
+      } catch (err) {
+        console.warn("[swap-phrase] spread call failed:", err);
+        setInlineAlts((prev) =>
+          prev && prev.mode === "replace" ? { ...prev, spreadLoading: false } : prev,
+        );
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [inlineAlts, ws.id]);
 
   // Velocity tracking for physics injection on drag release
   const lastDragPosRef = useRef<Position | null>(null);
@@ -1179,6 +1251,11 @@ export default function WorkspaceCanvas({
             startedAt={inlineAlts.startedAt}
             currentIdx={inlineAlts.currentIdx}
             total={inlineAlts.alternatives.length}
+            spreadLoading={inlineAlts.mode === "replace" && inlineAlts.spreadLoading}
+            spreadActive={
+              inlineAlts.mode === "replace" &&
+              !!inlineAlts.spreadCache[inlineAlts.currentIdx]
+            }
           />
         )}
 
@@ -1282,6 +1359,27 @@ export default function WorkspaceCanvas({
               const isCommitting = ia.state === "committing";
 
               if (ia.mode === "replace") {
+                const spreadContent = ia.spreadCache[ia.currentIdx];
+
+                // Spread-mode preview: render the LLM's whole-fragment edit
+                // (which has same-connotation occurrences swapped). No
+                // single-range highlight here — the entire fragment is
+                // the preview. The InlineRerollBadge above shows the
+                // "spread: N changes" indicator.
+                if (!isPending && spreadContent) {
+                  return (
+                    <div
+                      data-text-content
+                      className="cursor-text"
+                      style={{ textWrap: "pretty" } as React.CSSProperties}
+                    >
+                      <MarkdownText>{spreadContent}</MarkdownText>
+                    </div>
+                  );
+                }
+
+                // Single-swap preview (instant, while spread fires in
+                // the background or for the brief debounce window).
                 const before = f.content.slice(0, ia.charStart);
                 const after = f.content.slice(ia.charEnd);
                 const replacement = isPending
@@ -1336,11 +1434,11 @@ export default function WorkspaceCanvas({
           ) : (
             <div
               data-text-content
-              className="whitespace-pre-wrap select-text cursor-text"
+              className="select-text cursor-text"
               style={{ textWrap: "pretty" } as React.CSSProperties}
               onMouseUp={() => handleTextMouseUp(f.id, f.content)}
             >
-              {f.content}
+              <MarkdownText>{f.content}</MarkdownText>
             </div>
           )}
         </div>
@@ -1553,6 +1651,8 @@ export default function WorkspaceCanvas({
                   alternatives: [],
                   currentIdx: 0,
                   startedAt: Date.now(),
+                  spreadCache: {},
+                  spreadLoading: false,
                 });
                 setSplitToolbar(null);
                 window.getSelection()?.removeAllRanges();

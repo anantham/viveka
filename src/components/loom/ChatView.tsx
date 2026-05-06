@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { Workspace, Fragment, Operation } from "@/lib/workspace";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
+import MarkdownText from "../MarkdownText";
 
 /**
  * ChatView — the machinery x-ray.
@@ -119,8 +120,8 @@ function NextAssembly({
                   <span className="text-stone-700 font-mono">{shortId(c.id)}</span>
                   <span className="text-stone-700 ml-auto tabular-nums">{tokens}t</span>
                 </div>
-                <div className="text-xs text-stone-300 whitespace-pre-wrap leading-relaxed">
-                  {fragmentPreview(c.content)}
+                <div className="text-xs text-stone-300 leading-relaxed">
+                  <MarkdownText>{fragmentPreview(c.content)}</MarkdownText>
                 </div>
               </button>
             );
@@ -200,8 +201,8 @@ function OpEntry({
                     </span>
                   ) : null}
                 </div>
-                <div className="text-xs text-stone-300 whitespace-pre-wrap leading-relaxed">
-                  {fragmentPreview(result.content, 800)}
+                <div className="text-xs text-stone-300 leading-relaxed">
+                  <MarkdownText>{fragmentPreview(result.content, 800)}</MarkdownText>
                 </div>
               </div>
             )}
@@ -218,8 +219,8 @@ function OpEntry({
           <span className="uppercase tracking-wider text-emerald-500/80">user-typed</span>
           <span className="text-stone-600 tabular-nums">{ts}</span>
         </div>
-        <div className="text-xs text-stone-300 whitespace-pre-wrap leading-relaxed">
-          {fragmentPreview(op.content)}
+        <div className="text-xs text-stone-300 leading-relaxed">
+          <MarkdownText>{fragmentPreview(op.content)}</MarkdownText>
         </div>
       </div>
     );
@@ -263,8 +264,8 @@ function OpEntry({
                 <div className="text-[10px] uppercase tracking-wider text-stone-500 mb-1">
                   output
                 </div>
-                <div className="text-xs text-stone-300 whitespace-pre-wrap leading-relaxed">
-                  {fragmentPreview(result.content, 800)}
+                <div className="text-xs text-stone-300 leading-relaxed">
+                  <MarkdownText>{fragmentPreview(result.content, 800)}</MarkdownText>
                 </div>
               </div>
             )}

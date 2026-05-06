@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { TreeNode } from "@/lib/tree";
+import MarkdownText from "../MarkdownText";
 
 interface ReaderViewProps {
   nodes: TreeNode[];
@@ -258,14 +259,14 @@ export default function ReaderView({
                 onClick={() => onNodeClick(node.id)}
                 onDoubleClick={() => startEdit(node)}
                 onMouseUp={() => handleMouseUp(node.id, node.content)}
-                className={`text-base leading-relaxed cursor-text whitespace-pre-wrap ${
+                className={`text-base leading-relaxed cursor-text ${
                   isUser
                     ? "text-stone-200 font-normal"
                     : "text-stone-400"
                 }`}
                 title="Select text to split · Double-click to edit"
               >
-                {node.content}
+                <MarkdownText>{node.content}</MarkdownText>
               </div>
             )}
 
