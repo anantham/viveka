@@ -681,7 +681,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
   }
 
   return (
-    <div className={`flex flex-col h-screen mx-auto ${view === "canvas" ? "max-w-none w-full" : "max-w-5xl"}`}>
+    <div className="flex flex-col h-screen w-full">
       {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-stone-800">
@@ -941,6 +941,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
 
       {/* Action bar — hidden in canvas view (canvas has its own input) */}
       <div className={`border-t border-stone-800 bg-stone-900/50 ${view === "canvas" ? "hidden" : ""}`}>
+       <div className="max-w-4xl mx-auto w-full">
         {/* Quick actions */}
         <div className="px-4 py-2 flex gap-2 border-b border-stone-800/50">
           <button
@@ -988,6 +989,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
             </button>
           </div>
         </div>
+       </div>
       </div>
     </div>
   );

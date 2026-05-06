@@ -22,7 +22,7 @@ export default function ChatBubbleView({
   onEditCancel,
 }: ChatBubbleViewProps) {
   return (
-    <div className="flex flex-col gap-3 py-4 px-4">
+    <div className="flex flex-col gap-3 py-4 px-4 max-w-3xl mx-auto w-full">
       {nodes.map((node) => {
         if (node.role === "system") return null;
         const isUser = node.role === "user";
