@@ -7,7 +7,7 @@ import type { TreeNode, ConversationTree } from "@/lib/tree";
 import { Session, ContextBlock, estimateTokens, MAX_CONTEXT_TOKENS } from "@/lib/types";
 import ChatView from "./ChatView";
 import ReaderView from "./ReaderView";
-import TreeMapView from "./TreeMapView";
+import TreeView from "./TreeView";
 import CanvasView from "./CanvasView";
 import WorkspaceCanvas from "./WorkspaceCanvas";
 import PatternOverlay from "../PatternOverlay";
@@ -864,12 +864,7 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
           <div
             className={`${view === "split" ? "w-1/2" : "w-full"} overflow-auto bg-stone-950`}
           >
-            <TreeMapView
-              tree={tree}
-              onNodeSelect={handleNodeSelect}
-              onPrune={handlePrune}
-              onUnprune={handleUnprune}
-            />
+            <TreeView ws={ws} onSelect={handleNodeSelect} />
           </div>
         )}
       </div>
