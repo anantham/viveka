@@ -26,6 +26,13 @@ const MERGE_LABELS: Record<MergeType, string> = {
   summarize: "distill",
 };
 
+const MERGE_DESCRIPTIONS: Record<MergeType, string> = {
+  append: "A then B, lightly stitched",
+  prepend: "A before B, lightly stitched",
+  interleave: "sentences from both, woven",
+  summarize: "distilled into shorter synthesis",
+};
+
 interface MergeSpinnerProps {
   x: number;
   y: number;
@@ -69,6 +76,7 @@ export function MergeSpinner({
   const circumference = 2 * Math.PI * r;
   const color = MERGE_COLORS[mergeType];
   const label = MERGE_LABELS[mergeType];
+  const description = MERGE_DESCRIPTIONS[mergeType];
 
   return (
     <div
@@ -114,12 +122,27 @@ export function MergeSpinner({
           />
         )}
       </svg>
-      {/* Label below */}
+      {/* Label below — prominent two-line readout so the writer doesn't
+          have to memorize the color legend (blue=append, etc). */}
       <div
-        className="absolute text-center w-full text-[9px] font-medium"
-        style={{ top: size + 2, color, opacity: 0.9 }}
+        className="absolute text-center font-mono"
+        style={{
+          top: size + 4,
+          left: -80,
+          width: size + 160,
+        }}
       >
-        {confirmed ? "merging..." : label}
+        <div
+          className="text-[12px] font-semibold tracking-wide whitespace-nowrap"
+          style={{ color }}
+        >
+          {confirmed ? "merging…" : `merge ▸ ${label}`}
+        </div>
+        {!confirmed && (
+          <div className="text-[9px] text-stone-500 mt-0.5 whitespace-nowrap">
+            {description}
+          </div>
+        )}
       </div>
     </div>
   );

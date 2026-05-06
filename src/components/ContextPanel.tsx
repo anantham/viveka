@@ -21,8 +21,22 @@ export default function ContextPanel({
   const [filePath, setFilePath] = useState("");
   const [fileName, setFileName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  const addMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the +add menu on outside click
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target as Node)) {
+        setAddMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [addMenuOpen]);
 
   useEffect(() => {
     fetch("/api/context/library")
@@ -89,15 +103,79 @@ export default function ContextPanel({
     await addBlock(libBlock.name, libBlock.content, "library");
   };
 
-  // Read uploaded files (from <input type="file"> — single file, multi-file,
-  // or webkitdirectory folder) and add each as a context block. Filters
-  // to .md / .txt / .markdown by extension since folder upload returns
-  // every file in the tree. Reads contents client-side via File.text(),
-  // so the server never needs an absolute path.
-  const handleUploadedFiles = async (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
+  // Walk a single drag-drop entry (file or directory) recursively and
+  // collect File objects with their relative paths. Browser API:
+  // webkitGetAsEntry → FileSystemEntry → either FileSystemFileEntry
+  // (.file) or FileSystemDirectoryEntry (.createReader → readEntries).
+  const collectEntries = (entry: FileSystemEntry, prefix: string): Promise<File[]> =>
+    new Promise((resolve, reject) => {
+      if (entry.isFile) {
+        (entry as FileSystemFileEntry).file(
+          (file) => {
+            // Stamp the relative path so display names preserve folder
+            // structure (e.g. "notes/april.md" not just "april.md").
+            try {
+              Object.defineProperty(file, "webkitRelativePath", {
+                value: prefix + file.name,
+                writable: false,
+              });
+            } catch {
+              /* ignore — some browsers refuse re-defining the property */
+            }
+            resolve([file]);
+          },
+          reject,
+        );
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const all: File[] = [];
+        const readBatch = () => {
+          reader.readEntries(async (entries) => {
+            if (entries.length === 0) {
+              resolve(all);
+              return;
+            }
+            for (const sub of entries) {
+              const subFiles = await collectEntries(sub, prefix + entry.name + "/");
+              all.push(...subFiles);
+            }
+            // readEntries can return in batches — keep going until empty.
+            readBatch();
+          }, reject);
+        };
+        readBatch();
+      } else {
+        resolve([]);
+      }
+    });
+
+  // Extract files from a drop event's DataTransferItemList. Handles both
+  // dropped files and dropped folders (recurses into folders). Falls
+  // back to dt.files if the entry API isn't available.
+  const filesFromDataTransfer = async (dt: DataTransfer): Promise<File[]> => {
+    const items = dt.items;
+    if (items && items.length > 0 && typeof items[0].webkitGetAsEntry === "function") {
+      const entries: FileSystemEntry[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const e = items[i].webkitGetAsEntry?.();
+        if (e) entries.push(e);
+      }
+      const groups = await Promise.all(entries.map((e) => collectEntries(e, "")));
+      return groups.flat();
+    }
+    return Array.from(dt.files ?? []);
+  };
+
+  // Read uploaded files (from <input type="file"> or drag-drop) and add
+  // each as a context block. Filters to .md / .txt / .markdown by
+  // extension. Reads contents client-side via File.text() so the
+  // server never needs an absolute path.
+  const handleUploadedFiles = async (fileList: FileList | File[] | null) => {
+    if (!fileList) return;
+    const arr = Array.isArray(fileList) ? fileList : Array.from(fileList);
+    if (arr.length === 0) return;
     const allowed = /\.(md|markdown|txt)$/i;
-    const files = Array.from(fileList).filter((f) => allowed.test(f.name));
+    const files = arr.filter((f) => allowed.test(f.name));
     if (files.length === 0) {
       alert("No .md / .markdown / .txt files found in the selection.");
       return;
@@ -131,10 +209,16 @@ export default function ContextPanel({
     } finally {
       setLoading(false);
       setShowAdd(null);
-      // Clear the inputs so re-selecting the same file fires onChange again
+      // Clear the input so re-selecting the same file fires onChange again
       if (fileInputRef.current) fileInputRef.current.value = "";
-      if (folderInputRef.current) folderInputRef.current.value = "";
     }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    const files = await filesFromDataTransfer(e.dataTransfer);
+    await handleUploadedFiles(files);
   };
 
   const handleSaveToLibrary = async (block: ContextBlock) => {
@@ -227,38 +311,42 @@ export default function ContextPanel({
         </div>
       )}
 
-      {/* Add buttons */}
-      <div className="px-4 py-1.5 flex gap-2">
+      {/* Single + add block ▾ dropdown — collapses paste / file / library
+          into one entry point with a small popover menu. */}
+      <div className="px-4 py-1.5 relative" ref={addMenuRef}>
         <button
-          onClick={() => setShowAdd(showAdd === "paste" ? null : "paste")}
+          onClick={() => setAddMenuOpen((v) => !v)}
           className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-            showAdd === "paste"
+            addMenuOpen || showAdd
               ? "border-stone-500 text-stone-300"
               : "border-stone-700 text-stone-600 hover:text-stone-400"
           }`}
         >
-          + paste
+          + add block ▾
         </button>
-        <button
-          onClick={() => setShowAdd(showAdd === "file" ? null : "file")}
-          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-            showAdd === "file"
-              ? "border-stone-500 text-stone-300"
-              : "border-stone-700 text-stone-600 hover:text-stone-400"
-          }`}
-        >
-          + file
-        </button>
-        <button
-          onClick={() => setShowAdd(showAdd === "library" ? null : "library")}
-          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-            showAdd === "library"
-              ? "border-stone-500 text-stone-300"
-              : "border-stone-700 text-stone-600 hover:text-stone-400"
-          }`}
-        >
-          + library
-        </button>
+        {addMenuOpen && (
+          <div className="absolute left-4 top-7 z-50 bg-stone-900 border border-stone-700 rounded shadow-xl w-44 py-1 text-xs">
+            {(
+              [
+                { key: "paste", label: "Paste text", desc: "type or paste raw text" },
+                { key: "file", label: "Upload file/folder", desc: "drag-drop or browse" },
+                { key: "library", label: "From library", desc: "saved blocks across sessions" },
+              ] as const
+            ).map(({ key, label, desc }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setShowAdd(showAdd === key ? null : key);
+                  setAddMenuOpen(false);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-stone-800 transition-colors"
+              >
+                <div className="text-stone-200">{label}</div>
+                <div className="text-[10px] text-stone-600">{desc}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Paste form */}
@@ -295,26 +383,34 @@ export default function ContextPanel({
         </div>
       )}
 
-      {/* File picker — native browser dialog. Multi-select for files,
-          webkitdirectory for folders (recursive); both filter to
-          .md / .markdown / .txt before reading. */}
+      {/* Upload — single drop zone handles both files and folders.
+          Click opens the multi-file picker; drag a folder onto the zone
+          and the recursive walk finds every .md/.txt within. */}
       {showAdd === "file" && (
         <div className="px-4 py-2 space-y-2 border-t border-stone-800/50">
-          <div className="flex gap-2">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={loading}
-              className="px-3 py-1 text-xs bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 disabled:opacity-50"
-            >
-              {loading ? "loading…" : "Choose files…"}
-            </button>
-            <button
-              onClick={() => folderInputRef.current?.click()}
-              disabled={loading}
-              className="px-3 py-1 text-xs bg-stone-800 border border-stone-600 rounded text-stone-300 hover:bg-stone-700 disabled:opacity-50"
-            >
-              {loading ? "loading…" : "Choose folder…"}
-            </button>
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!dragActive) setDragActive(true);
+            }}
+            onDragLeave={(e) => {
+              // Only deactivate when leaving the zone itself, not entering children
+              if (e.currentTarget === e.target) setDragActive(false);
+            }}
+            onDrop={handleDrop}
+            className={`px-4 py-6 rounded border-2 border-dashed text-center cursor-pointer transition-colors ${
+              dragActive
+                ? "border-emerald-600 bg-emerald-950/30 text-emerald-300"
+                : "border-stone-700 hover:border-stone-600 text-stone-500"
+            } ${loading ? "opacity-50 pointer-events-none" : ""}`}
+          >
+            <div className="text-xs">
+              {loading ? "loading…" : dragActive ? "drop to add" : "drop files or a folder here"}
+            </div>
+            <div className="text-[10px] mt-1 text-stone-600">
+              {loading ? "" : "or click to browse files · .md / .markdown / .txt only"}
+            </div>
           </div>
           <input
             ref={fileInputRef}
@@ -324,19 +420,6 @@ export default function ContextPanel({
             className="hidden"
             onChange={(e) => handleUploadedFiles(e.target.files)}
           />
-          <input
-            ref={folderInputRef}
-            type="file"
-            multiple
-            // webkitdirectory + directory are non-standard but supported in
-            // Chrome / Edge / Safari / Firefox for folder upload.
-            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
-            className="hidden"
-            onChange={(e) => handleUploadedFiles(e.target.files)}
-          />
-          <div className="text-[10px] text-stone-700">
-            .md / .markdown / .txt only · folder picker grabs all matching files recursively
-          </div>
 
           {/* Power-user fallback: server-side absolute path. */}
           <details className="pt-1">
