@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
 
 Return ONLY the suggested user message, nothing else.`;
   const draftStartedAt = new Date().toISOString();
+  const draftStartMs = Date.now();
 
   Promise.all(
     pendingIds.map(async (fragId, i) => {
@@ -89,6 +90,7 @@ Return ONLY the suggested user message, nothing else. No quotes, no explanation,
         model,
         timestamp: draftStartedAt,
         prompt: promptTemplate,
+        durationMs: Date.now() - draftStartMs,
       });
       saveWorkspace(finalWs);
     }

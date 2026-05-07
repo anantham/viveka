@@ -81,6 +81,7 @@ export async function POST(req: NextRequest) {
           timestamp: new Date(startMs).toISOString(),
           prompt,
           model,
+          durationMs: Date.now() - startMs,
         });
         saveWorkspace(freshWs);
         console.log(`[expand] done in ${Date.now() - startMs}ms`);

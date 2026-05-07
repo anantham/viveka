@@ -33,6 +33,12 @@ function shortId(id: string) {
   return id.slice(0, 8);
 }
 
+function fmtDuration(ms?: number): string {
+  if (typeof ms !== "number") return "";
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function fmtTimestamp(iso: string) {
   try {
     const d = new Date(iso);
@@ -175,9 +181,7 @@ function OpEntry({
             <span className="text-[10px] text-stone-500 italic">ephemeral</span>
           )}
           {op.durationMs !== undefined && (
-            <span className="text-[10px] text-stone-700">
-              · {(op.durationMs / 1000).toFixed(1)}s
-            </span>
+            <span className="text-[10px] text-stone-700">· {fmtDuration(op.durationMs)}</span>
           )}
           <span className="text-[10px] text-stone-700 ml-auto">
             {expanded ? "▾" : "▸"}
@@ -248,6 +252,9 @@ function OpEntry({
           )}
           <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
           {op.model && <span className="text-[10px] text-stone-700">· {op.model}</span>}
+          {op.durationMs !== undefined && (
+            <span className="text-[10px] text-stone-700">· {fmtDuration(op.durationMs)}</span>
+          )}
           <span className="text-[10px] text-stone-700 font-mono">
             {op.sourceIds.map(shortId).join(" + ")} → {shortId(op.resultId)}
           </span>
@@ -293,6 +300,9 @@ function OpEntry({
           <span className="uppercase tracking-wider text-[10px] text-amber-400/80">reroll</span>
           <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
           <span className="text-[10px] text-stone-700">· {op.model}</span>
+          {op.durationMs !== undefined && (
+            <span className="text-[10px] text-stone-700">· {fmtDuration(op.durationMs)}</span>
+          )}
           {op.selectedText && (
             <span className="text-[10px] text-stone-500 italic">
               "{op.selectedText.length > 30 ? op.selectedText.slice(0, 30) + "…" : op.selectedText}"
@@ -352,6 +362,9 @@ function OpEntry({
           {op.mode && <span className="text-[10px] text-stone-700">· {op.mode}</span>}
           <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
           {op.model && <span className="text-[10px] text-stone-700">· {op.model}</span>}
+          {op.durationMs !== undefined && (
+            <span className="text-[10px] text-stone-700">· {fmtDuration(op.durationMs)}</span>
+          )}
           <span className="text-[10px] text-stone-700 font-mono">
             {shortId(op.sourceFragmentId)} → {op.resultIds.length} frag
           </span>
@@ -381,6 +394,9 @@ function OpEntry({
           <span className="uppercase tracking-wider text-[10px] text-cyan-400/80">draft</span>
           <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
           <span className="text-[10px] text-stone-700">· {op.model}</span>
+          {op.durationMs !== undefined && (
+            <span className="text-[10px] text-stone-700">· {fmtDuration(op.durationMs)}</span>
+          )}
           <span className="text-[10px] text-stone-700">
             {op.resultIds.length} drafts of {shortId(op.parentId)}
           </span>
@@ -410,6 +426,9 @@ function OpEntry({
           <span className="uppercase tracking-wider text-[10px] text-emerald-400/80">swap</span>
           <span className="text-[10px] text-stone-600 tabular-nums">{ts}</span>
           <span className="text-[10px] text-stone-700">· {op.method}</span>
+          {op.durationMs !== undefined && (
+            <span className="text-[10px] text-stone-700">· {fmtDuration(op.durationMs)}</span>
+          )}
           <span className="text-[10px] text-stone-500 italic">
             "{op.originalPhrase.length > 20 ? op.originalPhrase.slice(0, 20) + "…" : op.originalPhrase}"
             <span className="not-italic text-stone-700"> → </span>

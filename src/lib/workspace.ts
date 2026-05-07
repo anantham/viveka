@@ -112,6 +112,7 @@ export type Operation =
         preSourceSeqIdx: number;
         preTargetSeqIdx: number;
       };
+      durationMs?: number;
     }
   | { type: "unmerge"; mergedId: string; restoredIds: string[]; timestamp: string }
   | { type: "prune"; fragmentId: string; timestamp: string }
@@ -126,6 +127,7 @@ export type Operation =
       timestamp: string;
       selectedText?: string;
       prompt?: string;
+      durationMs?: number;
     }
   | {
       type: "expand";
@@ -135,6 +137,7 @@ export type Operation =
       timestamp: string;
       prompt?: string;
       model?: string;
+      durationMs?: number;
     }
   | {
       type: "draft";
@@ -143,6 +146,7 @@ export type Operation =
       model: string;
       timestamp: string;
       prompt?: string;
+      durationMs?: number;
     }
   | {
       // Precision-spread phrase swap. Pure read on the workspace
@@ -157,6 +161,7 @@ export type Operation =
       model: string;
       timestamp: string;
       prompt?: string;
+      durationMs?: number;
     };
 
 // ---------------------------------------------------------------------------

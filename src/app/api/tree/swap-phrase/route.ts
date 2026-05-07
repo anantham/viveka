@@ -55,6 +55,8 @@ export async function POST(req: NextRequest) {
   const occRe = new RegExp(`\\b${escaped}\\b`, "gi");
   const occurrences = (fullContent.match(occRe) ?? []).length;
 
+  const callStartMs = Date.now();
+
   // Helper to log every swap attempt to the X-ray, even the cheap
   // literal paths. Each call to this endpoint = one opLog entry.
   const logSwap = (method: string, swapCount: number, capturedPrompt?: string) => {
@@ -70,6 +72,7 @@ export async function POST(req: NextRequest) {
       model: fresh.settings.model,
       timestamp: new Date().toISOString(),
       prompt: capturedPrompt,
+      durationMs: Date.now() - callStartMs,
     });
     saveWorkspace(fresh);
   };

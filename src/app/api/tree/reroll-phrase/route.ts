@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
   const systemPrompt =
     "You are a writing assistant. You return ONLY valid JSON arrays of short strings — alternative phrasings of a small phrase the user wants to vary. No markdown fences, no explanation, no full-sentence rewrites. Each element must be a drop-in replacement preserving the original phrase's word count (or close to it). Alternatives must NOT contain the original word. Output the JSON array and nothing else.";
 
+  const startMs = Date.now();
   try {
     const response = await queryClaudeCode(prompt, systemPrompt, [], {
       model: "sonnet",
@@ -127,6 +128,7 @@ export async function POST(req: NextRequest) {
         timestamp: new Date().toISOString(),
         selectedText,
         prompt,
+        durationMs: Date.now() - startMs,
       });
       saveWorkspace(ws);
 
@@ -162,6 +164,7 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
       selectedText,
       prompt,
+      durationMs: Date.now() - startMs,
     });
     saveWorkspace(ws);
 

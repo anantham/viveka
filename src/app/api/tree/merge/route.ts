@@ -97,6 +97,11 @@ export async function POST(req: NextRequest) {
           completedAt: new Date().toISOString(),
           durationMs,
         };
+        // Patch durationMs onto the existing merge op.
+        const op = freshWs.opLog.find(
+          (o) => o.type === "merge" && o.resultId === mergedFrag.id,
+        );
+        if (op?.type === "merge") op.durationMs = durationMs;
         saveWorkspace(freshWs);
         console.log(`[merge] DONE in ${durationMs}ms | ${response.text.length} chars | type=${mergeType}`);
       }
