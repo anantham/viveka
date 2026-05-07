@@ -9,57 +9,13 @@ import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
 import MergePreview from "./MergePreview";
 import dagre from "dagre";
 import MarkdownText from "../MarkdownText";
-
-type MergeType = "prepend" | "append" | "interleave" | "summarize" | "insert";
-
-/**
- * Snap a raw character offset to the nearest sane insertion point in
- * `text`. Preference order: paragraph break (\n\n) within a window,
- * then sentence end, then word boundary. Falls back to the raw offset.
- * Used by precision-insert mode so the splice lands between paragraphs
- * / sentences rather than mid-word.
- */
-function snapToInsertionBoundary(text: string, pos: number): number {
-  if (pos <= 0) return 0;
-  if (pos >= text.length) return text.length;
-
-  // 1. paragraph break (\n\n)
-  const PARA_WINDOW = 60;
-  let bestPara = -1;
-  let bestParaDist = Infinity;
-  for (let i = Math.max(0, pos - PARA_WINDOW); i <= Math.min(text.length - 2, pos + PARA_WINDOW); i++) {
-    if (text[i] === "\n" && text[i + 1] === "\n") {
-      const offset = i + 2;
-      const dist = Math.abs(offset - pos);
-      if (dist < bestParaDist) { bestParaDist = dist; bestPara = offset; }
-    }
-  }
-  if (bestPara !== -1) return bestPara;
-
-  // 2. sentence end (. ! ? followed by whitespace)
-  const SENT_WINDOW = 30;
-  let bestSent = -1;
-  let bestSentDist = Infinity;
-  for (const m of text.matchAll(/[.!?]\s+/g)) {
-    const end = (m.index ?? 0) + m[0].length;
-    const dist = Math.abs(end - pos);
-    if (dist <= SENT_WINDOW && dist < bestSentDist) {
-      bestSentDist = dist;
-      bestSent = end;
-    }
-  }
-  if (bestSent !== -1) return bestSent;
-
-  // 3. word boundary
-  const WORD_WINDOW = 20;
-  for (let i = pos; i >= Math.max(0, pos - WORD_WINDOW); i--) {
-    if (/\s/.test(text[i])) return i + 1;
-  }
-  for (let i = pos; i <= Math.min(text.length - 1, pos + WORD_WINDOW); i++) {
-    if (/\s/.test(text[i])) return i + 1;
-  }
-  return pos;
-}
+import {
+  computeEffectiveWidths,
+  computeMergeIntent,
+  computeProximityPairs,
+  type FragmentBox,
+  type MergeType,
+} from "@/lib/canvas-geometry";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -886,27 +842,17 @@ export default function WorkspaceCanvas({
     insertOffset?: number;
   } | null>(() => {
     if (!mergeCandidate) return null;
-    const dragged = positions[mergeCandidate.draggedId];
-    const target = positions[mergeCandidate.targetId];
-    if (!dragged || !target) return null;
-    const targetSize = physicsNodeSize(mergeCandidate.targetId);
-    const draggedSize = physicsNodeSize(mergeCandidate.draggedId);
-    const draggedCenterY = dragged.y + draggedSize.h / 2;
-    const t = (draggedCenterY - target.y) / Math.max(1, targetSize.h);
-
-    if (t < 0) return { mergeType: "summarize" };
-    if (t < 0.15) return { mergeType: "prepend" };
-    if (t > 1) return { mergeType: "interleave" };
-    if (t > 0.85) return { mergeType: "append" };
-
-    // Body — insert at computed offset
+    const draggedPos = positions[mergeCandidate.draggedId];
+    const targetPos = positions[mergeCandidate.targetId];
+    if (!draggedPos || !targetPos) return null;
     const targetFrag = ws.fragments[mergeCandidate.targetId];
-    const content = targetFrag?.content ?? "";
-    if (content.length === 0) return { mergeType: "prepend" };
-    const fraction = (t - 0.15) / 0.7;
-    const rawOffset = Math.round(Math.max(0, Math.min(1, fraction)) * content.length);
-    const offset = snapToInsertionBoundary(content, rawOffset);
-    return { mergeType: "insert", insertOffset: offset };
+    return computeMergeIntent({
+      draggedPos,
+      draggedSize: physicsNodeSize(mergeCandidate.draggedId),
+      targetPos,
+      targetSize: physicsNodeSize(mergeCandidate.targetId),
+      targetContent: targetFrag?.content ?? "",
+    });
   }, [mergeCandidate, positions, physicsNodeSize, ws.fragments]);
 
   // ---------------------------------------------------------------------
@@ -926,46 +872,18 @@ export default function WorkspaceCanvas({
 
   const MIN_EFFECTIVE_WIDTH = 200;
   const effectiveWidths = useMemo(() => {
-    const out: Record<string, number> = {};
-    const visible = allVisible.filter((f) => positions[f.id]);
-    for (const a of visible) {
-      const aPos = positions[a.id];
-      const aH = heightFor(a);
-      if (!aPos) {
-        out[a.id] = nodeWidth;
-        continue;
-      }
-      const aTop = aPos.y;
-      const aBottom = aPos.y + aH;
-      const aLeft = aPos.x;
-      const aRight = aPos.x + nodeWidth;
-      let leftEnc = 0;
-      let rightEnc = 0;
-      for (const b of visible) {
-        if (b.id === a.id) continue;
-        const bPos = positions[b.id];
-        if (!bPos) continue;
-        const bH = heightFor(b);
-        const bTop = bPos.y;
-        const bBottom = bPos.y + bH;
-        // Vertical overlap is required for horizontal encroachment to
-        // matter — a neighbor far above or below shouldn't squish the
-        // column.
-        if (bBottom <= aTop || bTop >= aBottom) continue;
-        const bLeft = bPos.x;
-        const bRight = bPos.x + nodeWidth;
-        // Right-side encroachment: B's left edge has crossed into A's column.
-        if (bLeft > aLeft && bLeft < aRight) {
-          rightEnc = Math.max(rightEnc, aRight - bLeft);
-        }
-        // Left-side encroachment: B's right edge has crossed into A's column.
-        if (bRight > aLeft && bRight < aRight) {
-          leftEnc = Math.max(leftEnc, bRight - aLeft);
-        }
-      }
-      out[a.id] = Math.max(MIN_EFFECTIVE_WIDTH, nodeWidth - leftEnc - rightEnc);
-    }
-    return out;
+    const boxes: FragmentBox[] = allVisible
+      .map((f) => {
+        const pos = positions[f.id];
+        if (!pos) return null;
+        return { id: f.id, pos, height: heightFor(f) };
+      })
+      .filter((b): b is FragmentBox => !!b);
+    return computeEffectiveWidths({
+      fragments: boxes,
+      baseWidth: nodeWidth,
+      minWidth: MIN_EFFECTIVE_WIDTH,
+    });
   }, [allVisible, positions, nodeWidth, heightFor]);
 
   // -----------------------------------------------------------------------
@@ -982,33 +900,20 @@ export default function WorkspaceCanvas({
                         // collision-merge; this is just a visual threshold).
 
   const proximityPairs = useMemo(() => {
-    const ids = allVisible.map((f) => f.id);
-    const pairs: { a: string; b: string; dist: number; intensity: number }[] = [];
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        const a = positions[ids[i]];
-        const b = positions[ids[j]];
-        if (!a || !b) continue;
-        // Distance between fragment centers (use width/2, h/2 for centering)
-        const fA = ws.fragments[ids[i]];
-        const fB = ws.fragments[ids[j]];
-        if (!fA || !fB) continue;
-        const cx_a = a.x + nodeWidth / 2;
-        const cy_a = a.y + heightFor(fA) / 2;
-        const cx_b = b.x + nodeWidth / 2;
-        const cy_b = b.y + heightFor(fB) / 2;
-        const dx = cx_a - cx_b;
-        const dy = cy_a - cy_b;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < R_FLOW) {
-          // intensity: 0 at r_flow boundary, 1 at r_merge or closer
-          const intensity = Math.min(1, Math.max(0, (R_FLOW - dist) / (R_FLOW - R_MERGE)));
-          pairs.push({ a: ids[i], b: ids[j], dist, intensity });
-        }
-      }
-    }
-    return pairs;
-  }, [allVisible, positions, nodeWidth, heightFor, ws.fragments]);
+    const boxes: FragmentBox[] = allVisible
+      .map((f) => {
+        const pos = positions[f.id];
+        if (!pos) return null;
+        return { id: f.id, pos, height: heightFor(f) };
+      })
+      .filter((b): b is FragmentBox => !!b);
+    return computeProximityPairs({
+      fragments: boxes,
+      baseWidth: nodeWidth,
+      rFlow: R_FLOW,
+      rMerge: R_MERGE,
+    });
+  }, [allVisible, positions, nodeWidth, heightFor]);
 
   // -----------------------------------------------------------------------
   // Bounding box of all visible content (in canvas-content coordinates)
