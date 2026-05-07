@@ -447,6 +447,13 @@ export default function WorkspaceCanvas({
   // whether confirmed). Live derivation lets the writer wiggle the
   // dragged fragment during the hold to re-aim (e.g. shift the insert
   // caret to a different paragraph) without restarting the timer.
+  //
+  // mergedFragId is set AFTER the merge API returns and the merged
+  // fragment exists in the workspace. While set + the merged fragment
+  // is still generating, MergePreview keeps rendering (the deformation
+  // continues through the LLM call instead of hard-cutting). A
+  // separate useEffect clears this state when the merged fragment's
+  // status flips to complete or error.
   const [mergeCandidate, setMergeCandidate] = useState<{
     draggedId: string;
     targetId: string;
@@ -454,6 +461,7 @@ export default function WorkspaceCanvas({
     mergeType: MergeType;
     startedAt: number;
     confirmed: boolean;
+    mergedFragId?: string;
   } | null>(null);
 
   // Inline alternatives state — used by both "replace" (in-place phrase
@@ -1194,8 +1202,16 @@ export default function WorkspaceCanvas({
   // stale type stored at detection time) so the writer's last position
   // before confirm wins — they could have shifted from prepend to
   // insert@line-7 during the hold.
+  //
+  // Crucially: do NOT clear mergeCandidate in .then(). The API
+  // returns immediately (LLM runs async). If we cleared here,
+  // MergePreview would unmount the moment the API responds and the
+  // user would see a hard cut from "two fragments deforming" to
+  // "blank generating placeholder." Instead we stash mergedFragId on
+  // the state and let the watcher below clear once the merged
+  // fragment's status flips to complete/error.
   useEffect(() => {
-    if (!mergeCandidate?.confirmed) return;
+    if (!mergeCandidate?.confirmed || mergeCandidate.mergedFragId) return;
     const { draggedId, targetId } = mergeCandidate;
     const liveType = mergeIntent?.mergeType ?? mergeCandidate.mergeType;
     const insertOffset = mergeIntent?.insertOffset;
@@ -1210,15 +1226,37 @@ export default function WorkspaceCanvas({
         insertOffset,
       }),
     })
-      .then(() => {
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
         killNode(draggedId);
-        setMergeCandidate(null);
+        // Stash the merged fragment id so MergePreview keeps rendering
+        // until the LLM call completes (watcher below).
+        if (data && data.resultId) {
+          setMergeCandidate((prev) =>
+            prev ? { ...prev, mergedFragId: data.resultId } : prev,
+          );
+        } else {
+          setMergeCandidate(null);
+        }
         onRefresh();
       })
       .catch(() => {
         setMergeCandidate(null);
       });
-  }, [mergeCandidate?.confirmed, mergeIntent, ws.id, killNode, onRefresh]);
+  }, [mergeCandidate?.confirmed, mergeCandidate?.mergedFragId, mergeIntent, ws.id, killNode, onRefresh]);
+
+  // Clear mergeCandidate when the merged fragment finishes generating.
+  // Closes the visual continuity loop: hold → confirm → LLM running
+  // (MergePreview still showing) → LLM done → MergePreview unmounts,
+  // merged fragment renders normally with its filled content.
+  useEffect(() => {
+    if (!mergeCandidate?.mergedFragId) return;
+    const merged = ws.fragments[mergeCandidate.mergedFragId];
+    if (!merged) return;
+    if (merged.status === "complete" || merged.status === "error") {
+      setMergeCandidate(null);
+    }
+  }, [mergeCandidate?.mergedFragId, ws.fragments]);
 
   // -----------------------------------------------------------------------
   // Render fragment based on semantic zoom
