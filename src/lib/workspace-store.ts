@@ -1,16 +1,18 @@
 /**
  * Workspace persistence. Reads/writes to .viveka-data/workspaces.json.
- * Auto-migrates old ConversationTree data on read.
+ * The legacy ConversationTree migration path was retired together
+ * with src/lib/tree.ts — the canvas has been on the Workspace data
+ * model for long enough that any active workspace has already
+ * migrated. Anyone with an unmigrated trees.json from before the
+ * cutover should rerun an older build to convert before pulling.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { Workspace } from "./workspace";
-import { ensureWorkspace } from "./workspace-migrate";
 
 const DATA_DIR = join(process.cwd(), ".viveka-data");
 const WORKSPACES_FILE = join(DATA_DIR, "workspaces.json");
-const LEGACY_TREES_FILE = join(DATA_DIR, "trees.json");
 
 function ensureDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
@@ -18,29 +20,9 @@ function ensureDir() {
 
 function loadAll(): Record<string, Workspace> {
   ensureDir();
-
-  // Try new format first
   try {
     const data = JSON.parse(readFileSync(WORKSPACES_FILE, "utf-8"));
-    const result: Record<string, Workspace> = {};
-    for (const [id, raw] of Object.entries(data)) {
-      result[id] = ensureWorkspace(raw);
-    }
-    return result;
-  } catch {
-    // No workspaces file — try migrating from legacy trees
-  }
-
-  try {
-    const data = JSON.parse(readFileSync(LEGACY_TREES_FILE, "utf-8"));
-    const result: Record<string, Workspace> = {};
-    for (const [id, raw] of Object.entries(data)) {
-      result[id] = ensureWorkspace(raw);
-    }
-    // Save migrated data to new file
-    saveAll(result);
-    console.log(`[workspace-store] migrated ${Object.keys(result).length} trees → workspaces`);
-    return result;
+    return data as Record<string, Workspace>;
   } catch {
     return {};
   }
