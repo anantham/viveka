@@ -73,6 +73,16 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    heading: "Browse hidden alts",
+    rows: [
+      {
+        key: <span className="text-stone-400">click "N alts" stat</span>,
+        description:
+          "Bottom-right cluster: click the count to open a side panel of unplaced sibling alternatives. Each row has pick (add to sequence) and stage (park) actions.",
+      },
+    ],
+  },
+  {
     heading: "Edit & vary",
     rows: [
       { key: <span className={KBD}>dbl-click</span>, description: "Edit fragment in place." },

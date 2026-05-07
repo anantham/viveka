@@ -23,6 +23,7 @@ export default function ContextPanel({
   const [loading, setLoading] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [dragItemCount, setDragItemCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addMenuRef = useRef<HTMLDivElement>(null);
 
@@ -390,15 +391,30 @@ export default function ContextPanel({
         <div className="px-4 py-2 space-y-2 border-t border-stone-800/50">
           <div
             onClick={() => fileInputRef.current?.click()}
+            onDragEnter={(e) => {
+              // dataTransfer.items is available during drag; .length gives
+              // the count of top-level items (file or folder). Browsers
+              // don't expose folder vs file during drag (only on drop), so
+              // we just show the count and let the user know we're ready.
+              if (e.dataTransfer?.items?.length) {
+                setDragItemCount(e.dataTransfer.items.length);
+              }
+            }}
             onDragOver={(e) => {
               e.preventDefault();
               if (!dragActive) setDragActive(true);
             }}
             onDragLeave={(e) => {
               // Only deactivate when leaving the zone itself, not entering children
-              if (e.currentTarget === e.target) setDragActive(false);
+              if (e.currentTarget === e.target) {
+                setDragActive(false);
+                setDragItemCount(0);
+              }
             }}
-            onDrop={handleDrop}
+            onDrop={(e) => {
+              setDragItemCount(0);
+              handleDrop(e);
+            }}
             className={`px-4 py-6 rounded border-2 border-dashed text-center cursor-pointer transition-colors ${
               dragActive
                 ? "border-emerald-600 bg-emerald-950/30 text-emerald-300"
@@ -406,7 +422,13 @@ export default function ContextPanel({
             } ${loading ? "opacity-50 pointer-events-none" : ""}`}
           >
             <div className="text-xs">
-              {loading ? "loading…" : dragActive ? "drop to add" : "drop files or a folder here"}
+              {loading
+                ? "loading…"
+                : dragActive
+                  ? dragItemCount > 0
+                    ? `drop to add ${dragItemCount} item${dragItemCount === 1 ? "" : "s"}`
+                    : "drop to add"
+                  : "drop files or a folder here"}
             </div>
             <div className="text-[10px] mt-1 text-stone-600">
               {loading ? "" : "or click to browse files · .md / .markdown / .txt only"}
