@@ -99,7 +99,12 @@ const NODE_WIDTH_SUMMARY = 320;
 const NODE_WIDTH_COMPACT = 200;
 const NODE_WIDTH_DOT = 24;
 const STAGE_X_OFFSET = 600;
-const MERGE_HOLD_MS = 2000;
+// Hold time before a merge gesture commits. The writer can wiggle the
+// dragged fragment during this window to retarget the merge mode (live
+// re-aim — see mergeIntent useMemo). 2.5s gives enough time to settle
+// on a precision-insert caret position without making the casual
+// append/prepend cases feel sluggish.
+const MERGE_HOLD_MS = 2500;
 const MERGE_LLM_ETA_MS = 9000; // empirical typical wall time for /api/tree/merge
 
 // Zoom thresholds: viewport zoom → semantic level
@@ -1377,7 +1382,17 @@ export default function WorkspaceCanvas({
         <div className="absolute -top-6 left-2 right-2 flex items-center justify-between opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
           <span className="text-[10px] uppercase tracking-wider text-stone-500 pointer-events-none">
             {label}
-            {f.timing && <span className="ml-2 text-stone-700">{f.timing.durationMs < 1000 ? `${f.timing.durationMs}ms` : `${(f.timing.durationMs / 1000).toFixed(1)}s`}</span>}
+            {f.timing && (
+              <span
+                className="ml-2 text-stone-700 normal-case tracking-normal"
+                title={`LLM call duration: ${f.timing.durationMs < 1000 ? `${f.timing.durationMs}ms` : `${(f.timing.durationMs / 1000).toFixed(2)}s`}`}
+              >
+                · gen{" "}
+                {f.timing.durationMs < 1000
+                  ? `${f.timing.durationMs}ms`
+                  : `${(f.timing.durationMs / 1000).toFixed(1)}s`}
+              </span>
+            )}
           </span>
           <div className="flex items-center gap-1.5 pointer-events-auto">
             {siblings && siblings.length > 1 && (
@@ -1632,25 +1647,28 @@ export default function WorkspaceCanvas({
         </span>
       </div>
 
-      {/* Toolbar: fit + re-layout, then stats */}
-      <div className="absolute top-3 right-3 z-40 flex flex-col items-end gap-1">
+      {/* Canvas controls cluster — bottom-right so they stay out of
+          the way of the prime working area. Stats + fit/re-layout
+          + (existing fullscreen button at bottom-3 right-3) sit
+          in the same corner zone. */}
+      <div className="absolute bottom-16 right-3 z-40 flex flex-col items-end gap-1">
         <div className="flex gap-1">
           <button
             onClick={fitNow}
-            className="text-[10px] px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 transition-colors"
+            className="text-[10px] px-2 py-0.5 rounded border border-stone-700 bg-stone-950/70 text-stone-500 hover:text-stone-300 hover:border-stone-500 transition-colors"
             title="Center and zoom-fit all content"
           >
             fit
           </button>
           <button
             onClick={relayoutNow}
-            className="text-[10px] px-2 py-0.5 rounded border border-stone-700 text-stone-500 hover:text-amber-300 hover:border-amber-700 transition-colors"
+            className="text-[10px] px-2 py-0.5 rounded border border-stone-700 bg-stone-950/70 text-stone-500 hover:text-amber-300 hover:border-amber-700 transition-colors"
             title="Discard saved positions and re-run layout from scratch"
           >
             re-layout
           </button>
         </div>
-        <div className="text-[10px] text-stone-700" title="Sibling alternatives are hidden on canvas — see tree view to browse them">
+        <div className="text-[10px] text-stone-700 bg-stone-950/70 px-2 py-0.5 rounded" title="Sibling alternatives are hidden on canvas — see tree view to browse them">
           {sequenceFragments.length} active · {stageFragments.length} staged
           {unplacedFragments.length > 0 && <span className="text-stone-800"> · {unplacedFragments.length} alts hidden</span>}
           {generatingFragments.length > 0 && <span className="text-blue-700"> · {generatingFragments.length} gen</span>}

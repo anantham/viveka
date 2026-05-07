@@ -864,7 +864,8 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
                   {!isSplit && (
                     <button
                       onClick={() => setFullscreen(true)}
-                      className="absolute bottom-16 right-3 z-40 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200"
+                      className="absolute bottom-3 right-3 z-40 text-xs px-2 py-1 bg-stone-800/80 border border-stone-700 rounded text-stone-400 hover:text-stone-200"
+                      title="Fullscreen canvas"
                     >
                       ⤢
                     </button>
