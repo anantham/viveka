@@ -436,6 +436,7 @@ export default function WorkspaceCanvas({
   } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const [altsBrowserOpen, setAltsBrowserOpen] = useState(false);
   const [dragState, setDragState] = useState<{
     fragmentId: string; offsetX: number; offsetY: number;
   } | null>(null);
@@ -1706,12 +1707,90 @@ export default function WorkspaceCanvas({
             re-layout
           </button>
         </div>
-        <div className="text-[10px] text-stone-700 bg-stone-950/70 px-2 py-0.5 rounded" title="Sibling alternatives are hidden on canvas — see tree view to browse them">
+        <div className="text-[10px] text-stone-700 bg-stone-950/70 px-2 py-0.5 rounded">
           {sequenceFragments.length} active · {stageFragments.length} staged
-          {unplacedFragments.length > 0 && <span className="text-stone-800"> · {unplacedFragments.length} alts hidden</span>}
+          {unplacedFragments.length > 0 && (
+            <button
+              onClick={() => setAltsBrowserOpen((v) => !v)}
+              className="ml-1 text-stone-500 hover:text-stone-300 underline-offset-2 hover:underline transition-colors"
+              title="Browse hidden sibling alternatives"
+            >
+              · {unplacedFragments.length} alts ▾
+            </button>
+          )}
           {generatingFragments.length > 0 && <span className="text-blue-700"> · {generatingFragments.length} gen</span>}
         </div>
       </div>
+
+      {/* Hidden-alts browser. Sibling alternatives that aren't in the
+          current sequence/stage live "off canvas" — visible in tree
+          view but invisible on the canvas to keep it focused on the
+          active path. The stat in the bottom-right cluster surfaces
+          the count; clicking it opens this panel for quick pick/stage
+          actions without leaving canvas. */}
+      {altsBrowserOpen && unplacedFragments.length > 0 && (
+        <div
+          className="absolute bottom-32 right-3 z-50 w-80 max-h-[60vh] overflow-y-auto bg-stone-900 border border-stone-700 rounded-md shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-baseline justify-between px-3 py-2 border-b border-stone-800">
+            <span className="text-[10px] uppercase tracking-wider text-stone-400">
+              hidden alts ({unplacedFragments.length})
+            </span>
+            <button
+              onClick={() => setAltsBrowserOpen(false)}
+              className="text-stone-500 hover:text-stone-300 text-base leading-none"
+              aria-label="close"
+            >
+              ×
+            </button>
+          </div>
+          <div className="divide-y divide-stone-800/60">
+            {unplacedFragments.map((f) => {
+              const role =
+                f.provenance.type === "ai-generated" ||
+                f.provenance.type === "merged" ||
+                f.provenance.type === "derived"
+                  ? "ai"
+                  : "you";
+              const tokens = Math.ceil(f.content.length / 4);
+              return (
+                <div key={f.id} className="px-3 py-2 hover:bg-stone-800/30 transition-colors group">
+                  <div className="flex items-baseline gap-2 text-[9px] uppercase tracking-wider text-stone-600 mb-1">
+                    <span>{role}</span>
+                    <span className="font-mono text-stone-700">{f.id.slice(0, 8)}</span>
+                    <span className="ml-auto tabular-nums">{tokens}t</span>
+                  </div>
+                  <div className="text-[11px] text-stone-300 leading-snug line-clamp-3 mb-2">
+                    {f.content}
+                  </div>
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => {
+                        onSelectFragment(f.id);
+                        setAltsBrowserOpen(false);
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded border border-emerald-700 text-emerald-400 hover:bg-emerald-950/40 transition-colors"
+                      title="Add to active sequence"
+                    >
+                      pick
+                    </button>
+                    <button
+                      onClick={() => {
+                        onZoneTransfer(f.id, "stage");
+                      }}
+                      className="text-[10px] px-2 py-0.5 rounded border border-amber-700 text-amber-400 hover:bg-amber-950/40 transition-colors"
+                      title="Move to stage"
+                    >
+                      stage
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Pan/zoom canvas. cursor:grab hints that the empty background is
           drag-pannable; fragments override with their own cursors. */}
