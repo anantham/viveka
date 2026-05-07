@@ -1,45 +1,63 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { TreeNode } from "@/lib/tree";
+import type { Fragment } from "@/lib/workspace";
 import MarkdownText from "../MarkdownText";
 
+/**
+ * Reader view — clean flowing prose for the active sequence.
+ * Pure projection of Workspace fragments. No ConversationTree
+ * bridge.
+ *
+ * - User turns rendered in slightly heavier weight; assistant turns flow
+ * - Click to edit inline (raw markdown in textarea, rendered on display)
+ * - Sibling navigation when branches exist (count provided by caller)
+ * - Role labels are subtle, hover-to-reveal
+ */
+
 interface ReaderViewProps {
-  nodes: TreeNode[];
-  onEdit: (nodeId: string, content: string) => void;
-  onNodeClick: (nodeId: string) => void;
-  onSplitRange?: (nodeId: string, charStart: number, charEnd: number) => void;
-  onMoveToStage?: (nodeId: string) => void;
+  fragments: Fragment[];
+  onEdit: (fragmentId: string, content: string) => void;
+  onFragmentClick: (fragmentId: string) => void;
+  onSplitRange?: (fragmentId: string, charStart: number, charEnd: number) => void;
+  onMoveToStage?: (fragmentId: string) => void;
   siblingCounts: Record<string, number>;
-  onNavigateSibling: (nodeId: string, direction: "prev" | "next") => void;
+  onNavigateSibling: (fragmentId: string, direction: "prev" | "next") => void;
 }
 
-/**
- * Reader view — clean flowing text for the active path.
- * Not bubbles. Not chat. A document you can read and refine.
- *
- * - User turns rendered in a slightly different weight
- * - Assistant turns flow naturally
- * - Click to edit inline
- * - Sibling navigation inline where branches exist
- * - Role labels are subtle, not loud
- */
-// Provenance → color mapping
-function provenanceColor(node: TreeNode): string {
-  const pType = node.provenance?.type;
-  if (pType === "ai-generated") return "border-l-blue-500/40";
-  if (pType === "imported") return "border-l-amber-500/40";
-  if (pType === "split" || pType === "extracted") return "border-l-violet-500/40";
-  if (pType === "merged") return "border-l-teal-500/40";
-  // Legacy fallback: use role
-  if (node.role === "assistant") return "border-l-blue-500/20";
+type Role = "system" | "user" | "assistant";
+
+function roleOf(f: Fragment): Role {
+  const t = f.provenance.type;
+  if (t === "system") return "system";
+  if (t === "ai-generated" || t === "merged" || t === "derived") return "assistant";
+  return "user";
+}
+
+function provenanceColor(f: Fragment): string {
+  const t = f.provenance.type;
+  if (t === "ai-generated") return "border-l-blue-500/40";
+  if (t === "imported") return "border-l-amber-500/40";
+  if (t === "split" || t === "extracted") return "border-l-violet-500/40";
+  if (t === "merged") return "border-l-teal-500/40";
+  if (roleOf(f) === "assistant") return "border-l-blue-500/20";
   return "border-l-stone-500/20";
 }
 
+function provenanceLabel(f: Fragment, role: Role): string {
+  const t = f.provenance.type;
+  if (t === "ai-generated")
+    return f.provenance.model?.split("/").pop()?.slice(0, 8) ?? "ai";
+  if (t === "split") return "split";
+  if (t === "imported") return "ref";
+  if (t === "merged") return "merged";
+  return role === "user" ? "you" : "ai";
+}
+
 export default function ReaderView({
-  nodes,
+  fragments,
   onEdit,
-  onNodeClick,
+  onFragmentClick,
   onSplitRange,
   onMoveToStage,
   siblingCounts,
@@ -48,7 +66,7 @@ export default function ReaderView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [selectionToolbar, setSelectionToolbar] = useState<{
-    nodeId: string;
+    fragmentId: string;
     charStart: number;
     charEnd: number;
     x: number;
@@ -56,9 +74,9 @@ export default function ReaderView({
   } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const startEdit = useCallback((node: TreeNode) => {
-    setEditingId(node.id);
-    setEditText(node.content);
+  const startEdit = useCallback((f: Fragment) => {
+    setEditingId(f.id);
+    setEditText(f.content);
   }, []);
 
   const saveEdit = useCallback(() => {
@@ -69,7 +87,7 @@ export default function ReaderView({
   }, [editingId, editText, onEdit]);
 
   // Detect text selection within a fragment and show floating toolbar
-  const handleMouseUp = useCallback((nodeId: string, nodeContent: string) => {
+  const handleMouseUp = useCallback((fragmentId: string, fragmentContent: string) => {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
       setSelectionToolbar(null);
@@ -82,21 +100,19 @@ export default function ReaderView({
       return;
     }
 
-    // Find character offsets within the node's content
-    const charStart = nodeContent.indexOf(text);
+    const charStart = fragmentContent.indexOf(text);
     if (charStart === -1) {
       setSelectionToolbar(null);
       return;
     }
     const charEnd = charStart + text.length;
 
-    // Position toolbar above selection
     const range = sel.getRangeAt(0);
     const rect = range.getBoundingClientRect();
     const containerRect = containerRef.current?.getBoundingClientRect();
 
     setSelectionToolbar({
-      nodeId,
+      fragmentId,
       charStart,
       charEnd,
       x: rect.left + rect.width / 2 - (containerRect?.left ?? 0),
@@ -112,7 +128,6 @@ export default function ReaderView({
         setSelectionToolbar(null);
       }
     };
-    // Small delay so the toolbar buttons can be clicked
     const delayedHandler = () => setTimeout(handler, 200);
     document.addEventListener("mousedown", delayedHandler);
     return () => document.removeEventListener("mousedown", delayedHandler);
@@ -131,9 +146,9 @@ export default function ReaderView({
         >
           <button
             onMouseDown={(e) => {
-              e.preventDefault(); // prevent blur
+              e.preventDefault();
               onSplitRange(
-                selectionToolbar.nodeId,
+                selectionToolbar.fragmentId,
                 selectionToolbar.charStart,
                 selectionToolbar.charEnd
               );
@@ -149,9 +164,8 @@ export default function ReaderView({
             <button
               onMouseDown={(e) => {
                 e.preventDefault();
-                // Split first, then the parent can move the result to stage
                 onSplitRange(
-                  selectionToolbar.nodeId,
+                  selectionToolbar.fragmentId,
                   selectionToolbar.charStart,
                   selectionToolbar.charEnd
                 );
@@ -167,33 +181,28 @@ export default function ReaderView({
         </div>
       )}
 
-      {nodes.map((node) => {
-        if (node.role === "system") return null;
-        const isUser = node.role === "user";
-        const isEditing = editingId === node.id;
-        const siblings = siblingCounts[node.id] || 1;
-        const isDraft = node.source === "ai-draft";
-        const isGenerating = node.status === "generating";
-        const colorClass = provenanceColor(node);
+      {fragments.map((f) => {
+        const role = roleOf(f);
+        if (role === "system") return null;
+        const isUser = role === "user";
+        const isEditing = editingId === f.id;
+        const siblings = siblingCounts[f.id] || 1;
+        const isGenerating = f.status === "generating";
+        const colorClass = provenanceColor(f);
+        const label = provenanceLabel(f, role);
 
         return (
-          <div key={node.id} className={`group relative border-l-2 pl-4 ${colorClass}`}>
-            {/* Role / provenance indicator — very subtle, left margin */}
+          <div key={f.id} className={`group relative border-l-2 pl-4 ${colorClass}`}>
+            {/* Role / provenance indicator — subtle, hover-to-reveal */}
             <div className="absolute -left-12 top-1 text-[9px] text-stone-700 uppercase tracking-wider opacity-0 group-hover:opacity-100 transition-opacity">
-              {node.provenance?.type === "ai-generated"
-                ? node.provenance.model?.split("/").pop()?.slice(0, 8) ?? "ai"
-                : node.provenance?.type === "split"
-                  ? "split"
-                  : node.provenance?.type === "imported"
-                    ? "ref"
-                    : isUser ? "you" : "ai"}
+              {label}
             </div>
 
             {/* Sibling navigator — appears when there are alternatives */}
             {siblings > 1 && (
               <div className="absolute -right-20 top-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
-                  onClick={() => onNavigateSibling(node.id, "prev")}
+                  onClick={() => onNavigateSibling(f.id, "prev")}
                   className="text-[10px] text-stone-600 hover:text-stone-400 px-1"
                 >
                   ←
@@ -202,18 +211,11 @@ export default function ReaderView({
                   {siblings}
                 </span>
                 <button
-                  onClick={() => onNavigateSibling(node.id, "next")}
+                  onClick={() => onNavigateSibling(f.id, "next")}
                   className="text-[10px] text-stone-600 hover:text-stone-400 px-1"
                 >
                   →
                 </button>
-              </div>
-            )}
-
-            {/* Draft indicator */}
-            {isDraft && (
-              <div className="text-[9px] text-blue-600 uppercase tracking-wider mb-1">
-                draft
               </div>
             )}
 
@@ -250,15 +252,15 @@ export default function ReaderView({
               <p className="text-base text-stone-600 animate-pulse leading-relaxed">
                 Generating...
               </p>
-            ) : node.status === "error" ? (
+            ) : f.status === "error" ? (
               <p className="text-base text-red-400/70 leading-relaxed">
-                Error: {node.error || "generation failed"}
+                Error: {f.error || "generation failed"}
               </p>
             ) : (
               <div
-                onClick={() => onNodeClick(node.id)}
-                onDoubleClick={() => startEdit(node)}
-                onMouseUp={() => handleMouseUp(node.id, node.content)}
+                onClick={() => onFragmentClick(f.id)}
+                onDoubleClick={() => startEdit(f)}
+                onMouseUp={() => handleMouseUp(f.id, f.content)}
                 className={`text-base leading-relaxed cursor-text ${
                   isUser
                     ? "text-stone-200 font-normal"
@@ -266,17 +268,17 @@ export default function ReaderView({
                 }`}
                 title="Select text to split · Double-click to edit"
               >
-                <MarkdownText>{node.content}</MarkdownText>
+                <MarkdownText>{f.content}</MarkdownText>
               </div>
             )}
 
             {/* Timing — very subtle */}
-            {node.timing && (
+            {f.timing && (
               <div className="text-[9px] text-stone-800 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                {node.timing.durationMs < 1000
-                  ? `${node.timing.durationMs}ms`
-                  : `${(node.timing.durationMs / 1000).toFixed(1)}s`}
-                {node.model && ` · ${node.model}`}
+                {f.timing.durationMs < 1000
+                  ? `${f.timing.durationMs}ms`
+                  : `${(f.timing.durationMs / 1000).toFixed(1)}s`}
+                {f.provenance.model && ` · ${f.provenance.model}`}
               </div>
             )}
           </div>

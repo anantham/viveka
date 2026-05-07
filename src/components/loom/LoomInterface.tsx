@@ -878,15 +878,18 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
               {paneView === "reader" && (
                 <div className="w-full overflow-y-auto">
                   <ReaderView
-                    nodes={activePath}
+                    fragments={ws.sequence
+                      .map((id) => ws.fragments[id])
+                      .filter((f): f is Fragment => !!f)}
                     onEdit={handleEdit}
-                    onNodeClick={handleNodeSelect}
+                    onFragmentClick={handleNodeSelect}
                     onSplitRange={handleSplitRange}
-                    onMoveToStage={(nodeId) => handleZoneTransfer(nodeId, "stage")}
+                    onMoveToStage={(fragId) => handleZoneTransfer(fragId, "stage")}
                     siblingCounts={siblingCounts}
-                    onNavigateSibling={async (nodeId, direction) => {
-                      const sibs = getSiblings(tree, nodeId).filter((n) => !n.pruned);
-                      const idx = sibs.findIndex((n) => n.id === nodeId);
+                    onNavigateSibling={async (fragId, direction) => {
+                      const sibs = getWsSiblings(ws, fragId);
+                      const idx = sibs.findIndex((s) => s.id === fragId);
+                      if (idx === -1 || sibs.length === 0) return;
                       const nextIdx = direction === "next"
                         ? (idx + 1) % sibs.length
                         : (idx - 1 + sibs.length) % sibs.length;
