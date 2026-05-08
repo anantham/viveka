@@ -6,13 +6,13 @@ What the codebase actually does, captured so future audits and contributors have
 
 - **App routes**: `src/app/.../page.tsx` for views, `src/app/api/.../route.ts` for API handlers. One handler per file. Filename is always `route.ts`. Example: `src/app/api/tree/merge/route.ts`.
 - **Domain libraries**: `src/lib/<name>.ts`. One concern per file. Examples: `workspace.ts` (data model), `claude.ts` (LLM CLI wrapper), `obsidian.ts` (vault I/O), `heuristics.ts` (pattern flags).
-- **State stores**: `src/lib/<name>-store.ts`. Read-all / save-all on JSON file under `.viveka-data/`. Examples: `workspace-store.ts`, `session-store.ts`, `tree-store.ts`. Stores never expose mutators that take partial deltas — callers always read the whole record, mutate in memory, and save the whole record back.
-- **Hooks**: `src/hooks/use<Name>.ts`. Examples: `usePanZoom.ts`, `usePhysicsSimulation.ts`.
+- **State stores**: `src/lib/<name>-store.ts`. Read-all / save-all on JSON file under `.viveka-data/`. Examples: `workspace-store.ts`, `session-store.ts`. Stores never expose mutators that take partial deltas — callers always read the whole record, mutate in memory, and save the whole record back.
+- **Hooks**: `src/hooks/use<Name>.ts`. Examples: `usePanZoom.ts`, `usePhysicsSimulation.ts`, `useMergeFlow.ts`, `useInlineAlts.ts`.
 - **Components**: `src/components/.../<Name>.tsx`. Loom view components in `src/components/loom/`.
 
 ## Data persistence
 
-- **One JSON file per concept** under `.viveka-data/`: `workspaces.json`, `sessions.json`, `trees.json` (legacy), `intent-templates.json`, `llm-config.json`, `model-capabilities-cache.json`.
+- **One JSON file per concept** under `.viveka-data/`: `workspaces.json`, `sessions.json`, `intent-templates.json`, `llm-config.json`, `model-capabilities-cache.json`. (The legacy `trees.json` migration was retired with the `tree.ts` deletion on 2026-05-08.)
 - **Single-user, file-backed.** No database. The whole `.viveka-data/` directory is the durable state.
 - **Camel-case JSON shapes.** Match the TypeScript interface. No snake_case / kebab-case. Examples: `canvasPositions`, `previousVersions`, `sourceFragmentIds`, `siblingNodeIds`.
 
@@ -46,7 +46,7 @@ What the codebase actually does, captured so future audits and contributors have
 
 - **Tailwind utility classes inline.** No CSS modules, no styled-components. Arbitrary values via `[...]` syntax (`text-[15px]`, `-inset-[14px]`).
 - **Color palette is stone-based** with semantic accents:
-  - Provenance: `emerald` (human), `blue` (ai), `violet` (split / replace), `amber` (imported / prepend), `teal` (derived / summarise), `rose` (warning / unmerge).
+  - Provenance: `emerald` (human-typed / insert merge), `blue` (ai-generated / append merge), `violet` (split / replace / interleave merge), `amber` (imported / prepend merge / draft fallback), `teal` (derived / summarise merge), `rose` (warning / unmerge), `fuchsia` (expand op in X-ray), `cyan` (draft op in X-ray).
   - Status: `red-400` for error, `emerald-400` for success.
 - **Stripe-not-border for fragments**: `border-l-2 border-l-<color>-500/N` rather than full-fragment borders.
 - **Hover chrome** uses `group-hover:opacity-100` with a `pointer-events-none` toolbar that becomes `pointer-events-auto` on hover.
@@ -75,10 +75,10 @@ What the codebase actually does, captured so future audits and contributors have
 
 ## File-size guideline
 
-- Soft cap of 300 LOC per file. Warning signs:
-  - `src/components/loom/WorkspaceCanvas.tsx` (1535) — split into hooks (`useFragmentInteractions`, `useMergeFlow`) is on the list.
-  - `src/components/loom/LoomInterface.tsx` (990) — mostly view dispatch; lives.
-  - `src/lib/tree.ts` (677) — legacy, will be deleted when migration completes.
-  - `src/lib/workspace.ts` (504) — splittable into `workspace-types.ts` + `workspace-ops.ts` later.
+- Soft cap of 300 LOC per file. Warning signs (LOC as of 2026-05-08):
+  - `src/components/loom/WorkspaceCanvas.tsx` (~1630) — gesture state machines extracted to `useMergeFlow` and `useInlineAlts` hooks; further split candidates: `useFragmentDrag`, `useCanvasLayout`, a `<FragmentCard>` for the semantic-zoom switch.
+  - `src/components/loom/LoomInterface.tsx` (~917) — mostly view dispatch; lives.
+  - `src/lib/workspace.ts` (~811) — grew with `mergeFragments` / `unmergeFragments` ops; splittable into `workspace-types.ts` + `workspace-ops.ts` later.
+  - `src/components/loom/ChatView.tsx` (~501) — fine for now; OpEntry could split out as the op-type list grows.
 
 A growing file is fine until it stops fitting in working memory; that's the trigger to split.
