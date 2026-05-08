@@ -9,6 +9,8 @@ import { MergeSpinner, MERGE_COLORS_RGB } from "./MergeSpinner";
 import MergePreview from "./MergePreview";
 import dagre from "dagre";
 import MarkdownText from "../MarkdownText";
+import UnmergeFlashBadge from "./UnmergeFlashBadge";
+import InlineRerollBadge from "./InlineRerollBadge";
 import {
   computeEffectiveWidths,
   computeMergeIntent,
@@ -110,106 +112,7 @@ function MergeOrGenerateProgress({ fragment }: { fragment: Fragment }) {
   );
 }
 
-// Time-bounded unmerge flash. After a merge completes, this badge
-// auto-shows for ~8 seconds so the writer sees the undo affordance
-// without having to hover. The same action is also reachable via the
-// hover toolbar later, but the flash window means an "oh that's not
-// what I wanted" reaction has an obvious target.
-const UNMERGE_FLASH_MS = 30000;
-function UnmergeFlashBadge({
-  fragmentId,
-  completedAtIso,
-  onUnmerge,
-}: {
-  fragmentId: string;
-  completedAtIso: string;
-  onUnmerge: (id: string) => void;
-}) {
-  const completedAt = new Date(completedAtIso).getTime();
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const initialRemaining = UNMERGE_FLASH_MS - (Date.now() - completedAt);
-    if (initialRemaining <= 0) return;
-    const id = setInterval(() => setNow(Date.now()), 250);
-    const t = setTimeout(() => clearInterval(id), initialRemaining + 50);
-    return () => { clearInterval(id); clearTimeout(t); };
-  }, [completedAt]);
-  const elapsed = now - completedAt;
-  if (elapsed >= UNMERGE_FLASH_MS) return null;
-  const remaining = Math.ceil((UNMERGE_FLASH_MS - elapsed) / 1000);
-  // Fade out over the last ~1.2s
-  const opacity = elapsed > UNMERGE_FLASH_MS - 1200
-    ? Math.max(0, (UNMERGE_FLASH_MS - elapsed) / 1200)
-    : 1;
-  return (
-    <button
-      onClick={(e) => { e.stopPropagation(); onUnmerge(fragmentId); }}
-      className="absolute -top-7 right-2 z-50 px-2 py-0.5 rounded bg-rose-950/80 border border-rose-700/60 text-[10px] text-rose-200 font-mono pointer-events-auto hover:text-rose-100 hover:bg-rose-900/80 transition-colors"
-      style={{ opacity, transition: "opacity 200ms ease-out, background-color 150ms, color 150ms" }}
-      title="Restore the two original fragments and remove this merged result"
-    >
-      ↶ unmerge · {remaining}s
-    </button>
-  );
-}
 
-// Tiny floating badge for the inline phrase reroll. Pending: spinner +
-// elapsed counter + ETA. Preview: index of N + arrow hints. Anchored
-// above the source fragment so it doesn't displace text.
-function InlineRerollBadge({
-  state,
-  startedAt,
-  currentIdx,
-  total,
-  spreadLoading,
-  spreadActive,
-}: {
-  state: "pending" | "preview" | "committing";
-  startedAt: number;
-  currentIdx: number;
-  total: number;
-  spreadLoading?: boolean;
-  spreadActive?: boolean;
-}) {
-  const [, force] = useState(0);
-  useEffect(() => {
-    if (state !== "pending") return;
-    const id = setInterval(() => force((n) => n + 1), 100);
-    return () => clearInterval(id);
-  }, [state]);
-
-  if (state === "pending") {
-    const elapsed = (Date.now() - startedAt) / 1000;
-    const eta = 12;
-    return (
-      <div className="absolute -top-7 left-2 z-50 flex items-center gap-1.5 px-2 py-0.5 rounded bg-violet-950/80 border border-violet-700/60 text-[10px] text-violet-200 font-mono pointer-events-none">
-        <span className="inline-block w-2 h-2 rounded-full bg-violet-400 animate-pulse" />
-        <span className="tabular-nums">{elapsed.toFixed(1)}s · ~{eta}s</span>
-      </div>
-    );
-  }
-  if (state === "committing") {
-    return (
-      <div className="absolute -top-7 left-2 z-50 px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-[10px] text-emerald-200 font-mono pointer-events-none">
-        committing…
-      </div>
-    );
-  }
-  // preview
-  return (
-    <div className="absolute -top-7 left-2 z-50 flex items-center gap-1.5 px-2 py-0.5 rounded bg-violet-950/80 border border-violet-600/70 text-[10px] text-violet-100 font-mono pointer-events-auto">
-      <span className="text-violet-300">←</span>
-      <span className="tabular-nums">{currentIdx + 1}/{total}</span>
-      <span className="text-violet-300">→</span>
-      {spreadLoading ? (
-        <span className="text-violet-400/80 ml-1 animate-pulse">spreading…</span>
-      ) : spreadActive ? (
-        <span className="text-emerald-300/80 ml-1">spread ✓</span>
-      ) : null}
-      <span className="text-violet-500/80 ml-1">↵ pick · esc revert</span>
-    </div>
-  );
-}
 
 // Estimate the rendered height of a fragment so dagre + physics give it
 // enough vertical room. Without this, every fragment is treated as 80px
