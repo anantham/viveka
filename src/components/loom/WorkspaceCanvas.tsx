@@ -11,6 +11,7 @@ import dagre from "dagre";
 import MarkdownText from "../MarkdownText";
 import UnmergeFlashBadge from "./UnmergeFlashBadge";
 import InlineRerollBadge from "./InlineRerollBadge";
+import { useMergeFlow, type MergeCandidate } from "@/hooks/useMergeFlow";
 import {
   computeEffectiveWidths,
   computeMergeIntent,
@@ -301,28 +302,11 @@ export default function WorkspaceCanvas({
   } | null>(null);
   const [inputText, setInputText] = useState("");
 
-  // Merge candidate state. mergeType + insertOffset are LIVE-derived
-  // from positions (see mergeIntent memo below) — this state only
-  // tracks the gesture lifecycle (which fragments + when started +
-  // whether confirmed). Live derivation lets the writer wiggle the
-  // dragged fragment during the hold to re-aim (e.g. shift the insert
-  // caret to a different paragraph) without restarting the timer.
-  //
-  // mergedFragId is set AFTER the merge API returns and the merged
-  // fragment exists in the workspace. While set + the merged fragment
-  // is still generating, MergePreview keeps rendering (the deformation
-  // continues through the LLM call instead of hard-cutting). A
-  // separate useEffect clears this state when the merged fragment's
-  // status flips to complete or error.
-  const [mergeCandidate, setMergeCandidate] = useState<{
-    draggedId: string;
-    targetId: string;
-    angle: number;
-    mergeType: MergeType;
-    startedAt: number;
-    confirmed: boolean;
-    mergedFragId?: string;
-  } | null>(null);
+  // Merge candidate gesture state. Lifecycle managed by useMergeFlow
+  // (called below after positions/physicsNodeSize are available); the
+  // physics simulation's onMergeCandidate callback writes here at
+  // detection time.
+  const [mergeCandidate, setMergeCandidate] = useState<MergeCandidate | null>(null);
 
   // Inline alternatives state — used by both "replace" (in-place phrase
   // swap) and "extend" (in-place continuation preview). Shared shape for
@@ -740,23 +724,20 @@ export default function WorkspaceCanvas({
   // position within the body, snapped to the nearest paragraph break /
   // sentence end / word boundary so the splice lands somewhere sane.
   // -----------------------------------------------------------------------
-  const mergeIntent = useMemo<{
-    mergeType: MergeType;
-    insertOffset?: number;
-  } | null>(() => {
-    if (!mergeCandidate) return null;
-    const draggedPos = positions[mergeCandidate.draggedId];
-    const targetPos = positions[mergeCandidate.targetId];
-    if (!draggedPos || !targetPos) return null;
-    const targetFrag = ws.fragments[mergeCandidate.targetId];
-    return computeMergeIntent({
-      draggedPos,
-      draggedSize: physicsNodeSize(mergeCandidate.draggedId),
-      targetPos,
-      targetSize: physicsNodeSize(mergeCandidate.targetId),
-      targetContent: targetFrag?.content ?? "",
-    });
-  }, [mergeCandidate, positions, physicsNodeSize, ws.fragments]);
+  // Merge gesture lifecycle: hold timer, fire API, status watcher,
+  // live position-derived mode/insert-offset. State + setter live in
+  // this component (so physics's detection callback can write to
+  // them); the side effects are owned by the hook.
+  const { mergeIntent } = useMergeFlow({
+    ws,
+    positions,
+    physicsNodeSize,
+    holdMs: MERGE_HOLD_MS,
+    killNode,
+    onRefresh,
+    mergeCandidate,
+    setMergeCandidate,
+  });
 
   // ---------------------------------------------------------------------
   // Pretext-with-obstacles soft avoidance.
@@ -988,84 +969,6 @@ export default function WorkspaceCanvas({
   const saveEdit = useCallback(() => { if (editingId) { onEdit(editingId, editText); setEditingId(null); } }, [editingId, editText, onEdit]);
   const handleSend = useCallback(() => { if (!inputText.trim()) return; onSubmitMessage(inputText.trim()); setInputText(""); }, [inputText, onSubmitMessage]);
 
-
-  // Merge candidate timer: confirm after 4 seconds of continuous overlap.
-  // 2s was too quick — accidental drag-throughs were triggering merges
-  // before the writer signalled intent. 4s gives a deliberate pause
-  // matching the visual deformation timing.
-  useEffect(() => {
-    if (!mergeCandidate || mergeCandidate.confirmed) return;
-    const elapsed = Date.now() - mergeCandidate.startedAt;
-    const remaining = MERGE_HOLD_MS - elapsed;
-    if (remaining <= 0) {
-      setMergeCandidate((prev) => prev ? { ...prev, confirmed: true } : null);
-      return;
-    }
-    const id = setTimeout(() => {
-      setMergeCandidate((prev) => prev ? { ...prev, confirmed: true } : null);
-    }, remaining);
-    return () => clearTimeout(id);
-  }, [mergeCandidate]);
-
-  // Fire merge API when confirmed. Uses the LIVE mergeIntent (not the
-  // stale type stored at detection time) so the writer's last position
-  // before confirm wins — they could have shifted from prepend to
-  // insert@line-7 during the hold.
-  //
-  // Crucially: do NOT clear mergeCandidate in .then(). The API
-  // returns immediately (LLM runs async). If we cleared here,
-  // MergePreview would unmount the moment the API responds and the
-  // user would see a hard cut from "two fragments deforming" to
-  // "blank generating placeholder." Instead we stash mergedFragId on
-  // the state and let the watcher below clear once the merged
-  // fragment's status flips to complete/error.
-  useEffect(() => {
-    if (!mergeCandidate?.confirmed || mergeCandidate.mergedFragId) return;
-    const { draggedId, targetId } = mergeCandidate;
-    const liveType = mergeIntent?.mergeType ?? mergeCandidate.mergeType;
-    const insertOffset = mergeIntent?.insertOffset;
-    fetch("/api/tree/merge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        treeId: ws.id,
-        sourceId: draggedId,
-        targetId,
-        mergeType: liveType,
-        insertOffset,
-      }),
-    })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        killNode(draggedId);
-        // Stash the merged fragment id so MergePreview keeps rendering
-        // until the LLM call completes (watcher below).
-        if (data && data.resultId) {
-          setMergeCandidate((prev) =>
-            prev ? { ...prev, mergedFragId: data.resultId } : prev,
-          );
-        } else {
-          setMergeCandidate(null);
-        }
-        onRefresh();
-      })
-      .catch(() => {
-        setMergeCandidate(null);
-      });
-  }, [mergeCandidate?.confirmed, mergeCandidate?.mergedFragId, mergeIntent, ws.id, killNode, onRefresh]);
-
-  // Clear mergeCandidate when the merged fragment finishes generating.
-  // Closes the visual continuity loop: hold → confirm → LLM running
-  // (MergePreview still showing) → LLM done → MergePreview unmounts,
-  // merged fragment renders normally with its filled content.
-  useEffect(() => {
-    if (!mergeCandidate?.mergedFragId) return;
-    const merged = ws.fragments[mergeCandidate.mergedFragId];
-    if (!merged) return;
-    if (merged.status === "complete" || merged.status === "error") {
-      setMergeCandidate(null);
-    }
-  }, [mergeCandidate?.mergedFragId, ws.fragments]);
 
   // -----------------------------------------------------------------------
   // Render fragment based on semantic zoom
