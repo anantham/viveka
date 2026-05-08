@@ -18,8 +18,10 @@ const BACKEND_LABELS: Record<LLMBackend, string> = {
   openrouter: "OpenRouter",
 };
 
+type ExportFormat = "session" | "prose" | "canvas";
+
 interface LLMSettingsProps {
-  onExport?: () => void;
+  onExport?: (format?: ExportFormat) => void;
   exporting?: boolean;
 }
 
@@ -226,21 +228,51 @@ export default function LLMSettings({ onExport, exporting }: LLMSettingsProps = 
             <div className="text-xs text-stone-500 pt-1">{status}</div>
           )}
 
-          {/* Actions */}
+          {/* Actions — Obsidian vault exports.
+              prose:    plain markdown of the active sequence, for reading.
+              canvas:   .canvas file (JSON Canvas) for spatial layout.
+              session:  full session metrics + frontmatter + exchange log. */}
           {onExport && (
-            <div className="pt-2 border-t border-stone-800">
+            <div className="pt-2 border-t border-stone-800 space-y-1.5">
               <div className="text-xs text-stone-400 font-medium uppercase tracking-wider mb-2">
-                Actions
+                Export to Obsidian
               </div>
               <button
-                onClick={() => {
-                  onExport();
-                }}
+                onClick={() => onExport("prose")}
                 disabled={exporting}
                 className="w-full text-xs px-2 py-1.5 rounded border border-stone-700 text-stone-400 hover:text-stone-200 hover:border-stone-500 disabled:opacity-30 transition-colors text-left"
+                title="Plain markdown of the active sequence — for reading in Obsidian"
               >
-                {exporting ? "exporting..." : "Export to Obsidian"}
+                <div>as markdown (.md)</div>
+                <div className="text-[10px] text-stone-600 mt-0.5">
+                  prose for reading
+                </div>
               </button>
+              <button
+                onClick={() => onExport("canvas")}
+                disabled={exporting}
+                className="w-full text-xs px-2 py-1.5 rounded border border-stone-700 text-stone-400 hover:text-stone-200 hover:border-stone-500 disabled:opacity-30 transition-colors text-left"
+                title="JSON Canvas — opens in Obsidian's canvas viewer with spatial layout + edges"
+              >
+                <div>as canvas (.canvas)</div>
+                <div className="text-[10px] text-stone-600 mt-0.5">
+                  spatial layout + edges
+                </div>
+              </button>
+              <button
+                onClick={() => onExport("session")}
+                disabled={exporting}
+                className="w-full text-xs px-2 py-1.5 rounded border border-stone-700 text-stone-500 hover:text-stone-300 hover:border-stone-500 disabled:opacity-30 transition-colors text-left"
+                title="Full session export with frontmatter + pattern metrics + exchange log"
+              >
+                <div>as session (.md)</div>
+                <div className="text-[10px] text-stone-600 mt-0.5">
+                  frontmatter + metrics + log
+                </div>
+              </button>
+              {exporting && (
+                <div className="text-[10px] text-stone-500 pt-1">exporting…</div>
+              )}
             </div>
           )}
         </div>

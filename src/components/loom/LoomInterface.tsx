@@ -224,14 +224,14 @@ export default function LoomInterface({ initialTree }: LoomInterfaceProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws.id]);
 
-  const handleExportToObsidian = async () => {
+  const handleExportToObsidian = async (format: "session" | "prose" | "canvas" = "session") => {
     setExporting(true);
     setExportResult(null);
     try {
       const res = await fetch("/api/tree/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ treeId: ws.id }),
+        body: JSON.stringify({ treeId: ws.id, format }),
       });
       const data = await res.json();
       if (data.error) {

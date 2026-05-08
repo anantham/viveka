@@ -1,6 +1,7 @@
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { Session } from "./types";
+import type { Workspace, Fragment } from "./workspace";
 
 function getVaultPath(): string {
   const path = process.env.OBSIDIAN_VAULT_PATH;
@@ -149,6 +150,228 @@ ${session.completionCondition} → **${session.completionMet ? "MET" : "NOT MET"
 - Duration: ${durationMinutes} minutes
 - Pattern interventions: ${interventionCount}
 - Anthropomorphic level: max ${patternCounts.maxAnthropomorphicLevel}
+`;
+
+  await writeFile(filepath, md, "utf-8");
+  return filepath;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace → Obsidian canvas (.canvas) export
+// ---------------------------------------------------------------------------
+
+/**
+ * Obsidian canvas file format (JSON Canvas 1.0 — see
+ * https://jsoncanvas.org/). Subset we use:
+ *   - text nodes for fragments
+ *   - edges from the workspace's responded-to graph
+ *   - x/y from canvasPositions (or a sequence-derived fallback)
+ */
+interface CanvasNode {
+  id: string;
+  type: "text";
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color?: string; // 1-6 (red, orange, yellow, green, cyan, purple)
+}
+
+interface CanvasEdge {
+  id: string;
+  fromNode: string;
+  toNode: string;
+  fromSide?: "top" | "right" | "bottom" | "left";
+  toSide?: "top" | "right" | "bottom" | "left";
+  label?: string;
+}
+
+interface ObsidianCanvas {
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+}
+
+const NODE_W = 480;
+const NODE_H = 200;
+
+/**
+ * Map Viveka provenance to Obsidian's 1-6 color slots so the canvas
+ * file looks roughly right when opened. Colors don't survive every
+ * Obsidian theme but the convention is helpful.
+ */
+function provenanceToCanvasColor(f: Fragment): string | undefined {
+  const t = f.provenance.type;
+  if (t === "ai-generated") return "5"; // cyan
+  if (t === "merged") return "5"; // cyan-ish (was teal in our palette)
+  if (t === "split" || t === "extracted") return "6"; // purple
+  if (t === "imported") return "3"; // yellow / amber
+  if (t === "human-typed") return "4"; // green
+  if (t === "system") return undefined; // default
+  return undefined;
+}
+
+/** Heuristic height estimate so multi-paragraph fragments don't get clipped. */
+function estimateCanvasHeight(content: string): number {
+  if (!content) return 80;
+  // ~80 chars per line at width 480, plus 24px line height
+  const lines = Math.ceil(content.length / 80);
+  return Math.max(120, Math.min(800, 24 * lines + 32));
+}
+
+/**
+ * Build an Obsidian canvas from a Workspace.
+ *
+ * - Fragments → text nodes. Position from `canvasPositions[id]` if
+ *   present; otherwise a left-to-right sequence layout (root → seq).
+ * - Edges → all `responded-to`, `derived`, `split-from` edges as
+ *   canvas edges. The edge type is preserved as the label so it's
+ *   visible in Obsidian.
+ * - System root + any orphan fragments are included so re-import
+ *   round-trips don't lose data.
+ */
+export function workspaceToCanvas(ws: Workspace): ObsidianCanvas {
+  const nodes: CanvasNode[] = [];
+  const seenPositions = new Map<string, { x: number; y: number }>();
+
+  // Fallback layout for fragments without canvasPositions: spread the
+  // sequence horizontally; stage column to the right; unplaced below.
+  let fallbackX = 0;
+  const sequenceSet = new Set(ws.sequence);
+  const stageSet = new Set(ws.stageIds);
+
+  for (const id of ws.sequence) {
+    const f = ws.fragments[id];
+    if (!f) continue;
+    const pinned = ws.canvasPositions[id];
+    const pos = pinned ?? { x: fallbackX, y: 0 };
+    if (!pinned) fallbackX += NODE_W + 60;
+    seenPositions.set(id, pos);
+    nodes.push({
+      id,
+      type: "text",
+      text: f.content || "(empty)",
+      x: pos.x,
+      y: pos.y,
+      width: NODE_W,
+      height: estimateCanvasHeight(f.content),
+      color: provenanceToCanvasColor(f),
+    });
+  }
+
+  let stageY = 0;
+  const stageX = fallbackX + 80;
+  for (const id of ws.stageIds) {
+    if (seenPositions.has(id)) continue;
+    const f = ws.fragments[id];
+    if (!f) continue;
+    const pinned = ws.canvasPositions[id];
+    const pos = pinned ?? { x: stageX, y: stageY };
+    if (!pinned) stageY += NODE_H + 40;
+    seenPositions.set(id, pos);
+    nodes.push({
+      id,
+      type: "text",
+      text: f.content || "(empty)",
+      x: pos.x,
+      y: pos.y,
+      width: NODE_W,
+      height: estimateCanvasHeight(f.content),
+      color: provenanceToCanvasColor(f),
+    });
+  }
+
+  // Unplaced (sibling alts, etc.) — laid out below the sequence row.
+  let unplacedX = 0;
+  const unplacedY = NODE_H + 200;
+  for (const f of Object.values(ws.fragments)) {
+    if (seenPositions.has(f.id)) continue;
+    if (!f.content) continue;
+    if (sequenceSet.has(f.id) || stageSet.has(f.id)) continue;
+    const pinned = ws.canvasPositions[f.id];
+    const pos = pinned ?? { x: unplacedX, y: unplacedY };
+    if (!pinned) unplacedX += NODE_W + 60;
+    seenPositions.set(f.id, pos);
+    nodes.push({
+      id: f.id,
+      type: "text",
+      text: f.content || "(empty)",
+      x: pos.x,
+      y: pos.y,
+      width: NODE_W,
+      height: estimateCanvasHeight(f.content),
+      color: provenanceToCanvasColor(f),
+    });
+  }
+
+  // Edges — only between nodes we actually emitted.
+  const emitted = new Set(nodes.map((n) => n.id));
+  const edges: CanvasEdge[] = ws.edges
+    .filter((e) => emitted.has(e.from) && emitted.has(e.to))
+    .map((e, i) => ({
+      id: `edge-${i}`,
+      fromNode: e.from,
+      toNode: e.to,
+      fromSide: "right",
+      toSide: "left",
+      label: e.type === "responded-to" ? undefined : e.type,
+    }));
+
+  return { nodes, edges };
+}
+
+export async function writeWorkspaceCanvasToObsidian(
+  ws: Workspace,
+): Promise<string> {
+  const vaultPath = getVaultPath();
+  const canvasDir = join(vaultPath, "viveka", "canvases");
+  await mkdir(canvasDir, { recursive: true });
+
+  const slug = slugify(ws.intent || "untitled");
+  const dateStr = formatDate(ws.createdAt);
+  const filename = `${dateStr}-${slug}.canvas`;
+  const filepath = join(canvasDir, filename);
+
+  const canvas = workspaceToCanvas(ws);
+  await writeFile(filepath, JSON.stringify(canvas, null, 2), "utf-8");
+  return filepath;
+}
+
+/**
+ * Markdown export of just the active sequence — for "I want to read
+ * what I wrote in Obsidian." Skips the session-metric frontmatter
+ * that writeSessionToObsidian adds; this one is plain prose with a
+ * minimal frontmatter (intent + date).
+ */
+export async function writeWorkspaceProseToObsidian(
+  ws: Workspace,
+): Promise<string> {
+  const vaultPath = getVaultPath();
+  const proseDir = join(vaultPath, "viveka", "prose");
+  await mkdir(proseDir, { recursive: true });
+
+  const slug = slugify(ws.intent || "untitled");
+  const dateStr = formatDate(ws.createdAt);
+  const filename = `${dateStr}-${slug}.md`;
+  const filepath = join(proseDir, filename);
+
+  const body = ws.sequence
+    .map((id) => ws.fragments[id])
+    .filter((f): f is Fragment => !!f && !!f.content)
+    .filter((f) => f.provenance.type !== "system")
+    .map((f) => f.content)
+    .join("\n\n");
+
+  const md = `---
+date: ${ws.createdAt}
+intent: "${ws.intent.replace(/"/g, '\\"')}"
+tags:
+  - viveka/prose
+---
+
+# ${ws.intent}
+
+${body}
 `;
 
   await writeFile(filepath, md, "utf-8");
