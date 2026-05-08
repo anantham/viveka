@@ -12,6 +12,7 @@ import MarkdownText from "../MarkdownText";
 import UnmergeFlashBadge from "./UnmergeFlashBadge";
 import InlineRerollBadge from "./InlineRerollBadge";
 import { useMergeFlow, type MergeCandidate } from "@/hooks/useMergeFlow";
+import { useInlineAlts, type InlineAltsState } from "@/hooks/useInlineAlts";
 import {
   computeEffectiveWidths,
   computeMergeIntent,
@@ -320,132 +321,17 @@ export default function WorkspaceCanvas({
   //   normally; a ghost continuation is appended after it. Commit appends
   //   exactly ONE new child fragment with the chosen content; the other
   //   alternatives never persist.
-  type InlineAltsState =
-    | {
-        mode: "replace";
-        sourceFragmentId: string;
-        selectedText: string;
-        charStart: number;
-        charEnd: number;
-        state: "pending" | "preview" | "committing";
-        alternatives: string[];
-        currentIdx: number;
-        startedAt: number;
-        // Spread cache: alternative index → LLM-edited fragment content
-        // (with same-connotation occurrences swapped). Filled lazily as
-        // the user lands on each alternative. When present for the
-        // current index, the preview shows the spread version and
-        // commit uses it instead of the literal single-range swap.
-        spreadCache: Record<number, string>;
-        spreadLoading: boolean;
-      }
-    | {
-        mode: "extend";
-        sourceFragmentId: string;
-        state: "pending" | "preview" | "committing";
-        alternatives: string[];
-        currentIdx: number;
-        startedAt: number;
-      };
+  // Inline-alternatives state (replace + extend modes). Side effects
+  // — keyboard shortcuts during preview, LLM-aware spread-swap fire
+  // — owned by useInlineAlts (called below).
   const [inlineAlts, setInlineAlts] = useState<InlineAltsState | null>(null);
-
-  // Keyboard shortcuts during an inline-alternatives preview (replace OR
-  // extend). Arrows cycle, Enter commits per-mode, Esc dismisses. For
-  // replace mode, commit prefers the spread-cached LLM-aware edit if
-  // present (which contains same-connotation swaps across the whole
-  // fragment); falls back to the literal single-range swap otherwise.
-  useEffect(() => {
-    if (!inlineAlts || inlineAlts.state !== "preview") return;
-    const handler = (e: KeyboardEvent) => {
-      const N = inlineAlts.alternatives.length;
-      if (N === 0) return;
-      if (e.key === "ArrowRight" || e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) {
-        e.preventDefault();
-        setInlineAlts((prev) => prev ? { ...prev, currentIdx: (prev.currentIdx + 1) % N } : prev);
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-        e.preventDefault();
-        setInlineAlts((prev) => prev ? { ...prev, currentIdx: (prev.currentIdx - 1 + N) % N } : prev);
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        const ia = inlineAlts;
-        const alt = ia.alternatives[ia.currentIdx];
-        if (!alt) return;
-        if (ia.mode === "replace") {
-          const frag = ws.fragments[ia.sourceFragmentId];
-          if (!frag || !onCommitPhraseEdit) return;
-          const spread = ia.spreadCache[ia.currentIdx];
-          const newContent =
-            spread ??
-            frag.content.slice(0, ia.charStart) + alt + frag.content.slice(ia.charEnd);
-          setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
-          Promise.resolve(onCommitPhraseEdit(ia.sourceFragmentId, newContent)).finally(() => {
-            setInlineAlts(null);
-          });
-        } else {
-          // extend mode — append a new child fragment under the source
-          if (!onCommitExtend) return;
-          setInlineAlts((prev) => prev ? { ...prev, state: "committing" } : prev);
-          Promise.resolve(onCommitExtend(ia.sourceFragmentId, alt)).finally(() => {
-            setInlineAlts(null);
-          });
-        }
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        setInlineAlts(null);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [inlineAlts, onCommitPhraseEdit, onCommitExtend, ws.fragments]);
-
-  // Fire LLM-aware spread-swap when the user lands on an alternative
-  // (replace mode only). Debounced so rapid cycling doesn't flood the
-  // backend; result is cached per-alternative so cycling back is
-  // instant. The preview renderer prefers the cached spread over the
-  // literal single-range swap when present.
-  useEffect(() => {
-    if (!inlineAlts || inlineAlts.mode !== "replace" || inlineAlts.state !== "preview") return;
-    const ia = inlineAlts;
-    const alt = ia.alternatives[ia.currentIdx];
-    if (!alt) return;
-    if (ia.spreadCache[ia.currentIdx]) return; // already have it
-
-    const sourceId = ia.sourceFragmentId;
-    const idxAtFire = ia.currentIdx;
-    const timer = setTimeout(async () => {
-      setInlineAlts((prev) =>
-        prev && prev.mode === "replace" ? { ...prev, spreadLoading: true } : prev,
-      );
-      try {
-        const res = await fetch("/api/tree/swap-phrase", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            treeId: ws.id,
-            fragmentId: sourceId,
-            originalPhrase: ia.selectedText,
-            alternativePhrase: alt,
-          }),
-        });
-        const data = await res.json();
-        if (!data.editedContent) return;
-        setInlineAlts((prev) => {
-          if (!prev || prev.mode !== "replace" || prev.sourceFragmentId !== sourceId) return prev;
-          return {
-            ...prev,
-            spreadLoading: false,
-            spreadCache: { ...prev.spreadCache, [idxAtFire]: data.editedContent },
-          };
-        });
-      } catch (err) {
-        console.warn("[swap-phrase] spread call failed:", err);
-        setInlineAlts((prev) =>
-          prev && prev.mode === "replace" ? { ...prev, spreadLoading: false } : prev,
-        );
-      }
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [inlineAlts, ws.id]);
+  useInlineAlts({
+    ws,
+    inlineAlts,
+    setInlineAlts,
+    onCommitPhraseEdit,
+    onCommitExtend,
+  });
 
   // Velocity tracking for physics injection on drag release
   const lastDragPosRef = useRef<Position | null>(null);
